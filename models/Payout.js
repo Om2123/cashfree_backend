@@ -54,7 +54,7 @@ const PayoutSchema = new mongoose.Schema({
     // Status
     status: {
         type: String,
-        enum: ['pending', 'processing', 'completed', 'failed', 'cancelled'],
+        enum: ['requested', 'pending', 'processing', 'completed', 'failed', 'cancelled'],
         default: 'pending',
     },
     // Cashfree Transfer Details
@@ -72,6 +72,26 @@ const PayoutSchema = new mongoose.Schema({
     },
     processedByName: String,
     processedAt: Date,
+    // Approval/Request metadata
+    requestedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+    },
+    requestedByName: String,
+    requestedAt: Date,
+    approvedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+    },
+    approvedByName: String,
+    approvedAt: Date,
+    rejectedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+    },
+    rejectedByName: String,
+    rejectedAt: Date,
+    rejectionReason: String,
     failureReason: String,
     notes: String,
     createdAt: {

@@ -39,6 +39,9 @@ const UserSchema = new mongoose.Schema({
         unique: true,
         sparse: true,
     },
+    apiKeyCreatedAt: {  // ✅ ADD THIS
+        type: Date,
+    },
 });
 
 module.exports = mongoose.model('User', UserSchema);

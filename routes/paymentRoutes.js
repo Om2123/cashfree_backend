@@ -18,6 +18,7 @@ const {
     getAllTransactions,
     createPayout,
     getAllPayouts,
+    approvePayoutRequest,
 } = require('../controllers/superAdminController.js');
 
 const {
@@ -46,5 +47,6 @@ router.post('/merchant/payout/:payoutId/cancel', auth, cancelPayoutRequest);
 router.get('/admin/transactions', superAdminAuth, getAllTransactions);
 router.post('/admin/payout', superAdminAuth, createPayout);
 router.get('/admin/payouts', superAdminAuth, getAllPayouts);
+router.post('/admin/payout/:payoutId/approve', superAdminAuth, approvePayoutRequest);
 
 module.exports = router;

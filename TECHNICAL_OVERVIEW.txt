@@ -1,0 +1,137 @@
+CashKavach Backend - Technical Overview
+
+1) Stack & Entry
+- Node.js + Express server (index.js) with CORS and JSON parsing.
+- MongoDB via Mongoose.
+- Auth: JWT for dashboard routes, API Key for merchant payment APIs.
+- Cashfree PG (orders, links, pay) and Cashfree Payouts APIs via axios.
+
+2) Authentication & Access
+- JWT (x-auth-token):
+  - routes/authRoutes -> controllers/authController
+  - signup, login produce JWT signed with JWT_SECRET.
+  - middleware/auth validates JWT and attaches decoded.user.
+  - middleware/superAdminAuth validates JWT, loads user, enforces role===superAdmin, attaches full user to req.
+- API Key (x-api-key):
+  - routes/apiRoutes -> controllers/apiController
+  - create/get/delete/regenerate API keys (stored on user).
+  - middleware/apiKeyAuth loads user by apiKey, attaches req.user, req.merchantId, req.merchantName.
+
+3) Data Models (Mongoose)
+- models/User.js
+  - name, email (unique), password (hashed), role: admin|superAdmin
+  - businessName, businessDetails {...}
+  - apiKey (unique, sparse), apiKeyCreatedAt
+- models/Transaction.js
+  - transactionId, orderId (unique)
+  - merchantId (ref User), merchantName
+  - customerId, customerName, customerEmail, customerPhone
+  - amount, currency, description
+  - status: created|pending|paid|failed|cancelled|refunded|partial_refund
+  - cashfreeOrderToken, cashfreePaymentId, cashfreeOrderId, paymentMethod
+  - paidAt, failureReason, webhookData
+  - refundAmount, refundReason, refundedAt
+  - createdAt, updatedAt (pre-save hook updates updatedAt)
+- models/Payout.js
+  - payoutId (unique), merchantId (ref User), merchantName
+  - amount, commission, commissionRate, netAmount, currency
+  - transferMode: bank_transfer|upi|wallet, beneficiaryDetails {...}
+  - status: requested|pending|processing|completed|failed|cancelled
+  - cashfreeTransferId, cashfreeReferenceId, cashfreeUtr
+  - relatedTransactions: [string]
+  - processedBy (+Name, +At)
+  - requestedBy (+Name, +At)
+  - approvedBy (+Name, +At)
+  - rejectedBy (+Name, +At, reason)
+  - createdAt, updatedAt (pre-save hook updates updatedAt)
+
+4) Routes & Controllers
+- index.js
+  - /api/auth -> routes/authRoutes
+  - /api -> routes/apiRoutes (API key management; requires JWT)
+  - /api/payments -> routes/paymentRoutes
+
+- routes/authRoutes.js -> controllers/authController
+  - POST /api/auth/signup
+  - POST /api/auth/login
+  - GET  /api/auth/profile (JWT)
+  - PUT  /api/auth/profile (JWT)
+
+- routes/apiRoutes.js -> controllers/apiController (JWT)
+  - POST /api/create          (createApiKey)
+  - GET  /api/get             (getApiKey)
+  - DELETE /api/delete        (deleteApiKey)
+  - POST /api/regenerate      (regenerateApiKey)
+
+- routes/paymentRoutes.js
+  - Merchant (API Key via middleware/apiKeyAuth):
+    - POST /api/payments/create           -> createPayment
+    - POST /api/payments/pay              -> initiatePaymentMethod
+    - GET  /api/payments/methods          -> getPaymentMethods
+    - GET  /api/payments/status/:orderId  -> getPaymentStatus
+    - POST /api/payments/create-link      -> createPaymentLink
+    - GET  /api/payments/transactions     -> getTransactions
+    - POST /api/payments/refund/:orderId  -> refundPayment
+  - Admin (JWT via middleware/auth):
+    - GET  /api/payments/merchant/payouts           -> getMyPayouts
+    - POST /api/payments/merchant/payout/request    -> requestPayout
+    - GET  /api/payments/merchant/balance           -> getMyBalance
+    - POST /api/payments/merchant/payout/:payoutId/cancel -> cancelPayoutRequest
+  - SuperAdmin (JWT via middleware/superAdminAuth):
+    - GET  /api/payments/admin/transactions -> getAllTransactions
+    - POST /api/payments/admin/payout       -> createPayout (initiates Cashfree transfer)
+    - GET  /api/payments/admin/payouts      -> getAllPayouts
+    - POST /api/payments/admin/payout/:payoutId/approve -> approvePayoutRequest
+
+5) Cashfree Payment Flow (PG)
+- Create Order (Merchant API): POST /api/payments/create
+  - Validates amount, customer details, cleans phone and email.
+  - Calls Cashfree PG: POST /orders with order details.
+  - Receives payment_session_id and cf_order_id.
+  - Cleans session id if polluted (helper cleanSessionId). Stores in Transaction as cashfreeOrderToken and cashfreePaymentId.
+  - Returns paymentUrl (https://payments.cashfree.com/order/#/checkout?order_token=...).
+- Initiate Payment: POST /api/payments/pay
+  - Requires paymentSessionId and paymentMethod (+ channel for UPI; card/netbanking/app variants supported).
+  - Builds /orders/pay payload with method-specific fields (UPI collect/intent/qrcode; card; netbanking; wallet/app; paylater/cardless_emi in alt block).
+  - Calls Cashfree PG: POST /orders/pay.
+  - Marks Transaction as pending; returns provider response and next-step instructions (redirect, form-post, custom UI, or polling/QR/deeplink for UPI).
+- Get Payment Methods: GET /api/payments/methods?orderId=... or paymentSessionId=...
+  - Calls Cashfree PG: GET /orders/sessions/{sessionId} to infer enabled methods.
+- Get Status: GET /api/payments/status/:orderId
+  - Loads Transaction by merchantId + orderId.
+  - Calls Cashfree PG: GET /orders/{orderId}, maps provider order_status to local status (paid/pending/failed/cancelled), persists paidAt and method.
+- Refund: POST /api/payments/refund/:orderId
+  - Validates refundAmount ≤ available; POST /orders/{orderId}/refunds; updates local Transaction to refunded/partial_refund.
+
+6) Cashfree Payout Flow
+- Admin requests payout: POST /api/payments/merchant/payout/request (JWT)
+  - Validates amount, transferMode, beneficiary details; computes commission (2.5%).
+  - Derives available balance from successful Transactions minus refunds, commission, completed and pending payouts.
+  - Creates Payout with status "requested".
+- SuperAdmin approval: POST /api/payments/admin/payout/:payoutId/approve (JWT SuperAdmin)
+  - Moves status requested -> pending; records approvedBy (+At, +Name).
+- SuperAdmin creates payout transfer: POST /api/payments/admin/payout (JWT SuperAdmin)
+  - Creates Payout record (status pending), then calls Cashfree Payouts API
+    POST /payout/v1/requestTransfer with banktransfer or upi data.
+  - On success sets status processing, stores cashfreeTransferId/referenceId; otherwise marks failed with reason.
+- Payouts listing: GET /api/payments/admin/payouts (SuperAdmin) and GET /api/payments/merchant/payouts (Admin) with pagination and summaries.
+
+7) Security & Headers
+- Merchant APIs: require x-api-key (apiKeyAuth middleware); server populates req.user, req.merchantId, req.merchantName.
+- Dashboard/Admin APIs: require x-auth-token JWT; super admin endpoints require role check.
+- External calls set Cashfree headers via axios instance:
+  - PG: x-api-version=2023-08-01, x-client-id=CASHFREE_APP_ID, x-client-secret=CASHFREE_SECRET_KEY.
+  - Payouts: X-Client-Id, X-Client-Secret.
+
+8) Notable Validations & Helpers
+- cleanSessionId(sessionId): removes accidental suffixes like "payment"/"paymentpayment" before using.
+- Email and phone format checks; amount bounds; IFSC and UPI ID regex for payouts.
+- Pagination, search, date range filters for transactions and payouts; summaries and revenue metrics.
+
+9) Developer Usage
+- Dev server: npm run dev (nodemon). Prod: npm start.
+- Base URL: http://localhost:${PORT|5000}
+- Key env vars: JWT_SECRET, CASHFREE_BASE_URL, CASHFREE_APP_ID, CASHFREE_SECRET_KEY, CASHFREE_PAYOUT_URL, MongoDB connection in config/db.
+
+10) References
+- Postman (Get Transactions - Merchant): https://www.postman.com/winter-star-515914/cash-free-embedded-payment-for-saas/request/0qap64x/get-transactions-merchant

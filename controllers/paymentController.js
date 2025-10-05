@@ -837,6 +837,7 @@ exports.refundPayment = async (req, res) => {
     }
 };
 // ============ INITIATE PAYMENT WITH SPECIFIC METHOD ============
+// Note: Duplicate definition removed; keep a single authoritative function
 exports.initiatePaymentMethod = async (req, res) => {
     try {
         const {
@@ -1010,21 +1011,16 @@ exports.initiatePaymentMethod = async (req, res) => {
         console.log('📤 Cashfree Order Pay payload:', JSON.stringify(paymentPayload, null, 2));
 
         // Call Cashfree Order Pay API
-        const response = await cashfreePG.post('/orders/pay', paymentPayload, {
-            headers: {
-                'x-api-version': '2023-08-01',
-                'x-client-id': process.env.CASHFREE_APP_ID,
-                'x-client-secret': process.env.CASHFREE_SECRET_KEY,
-                'x-request-id': `REQ_${Date.now()}`,
-                'Content-Type': 'application/json'
-            }
-        });
+        const response = await cashfreePG.post('/orders/pay', paymentPayload);
 
         console.log('✅ Cashfree Order Pay response:', response.data);
 
         // Find and update transaction
         const transaction = await Transaction.findOne({
-            cashfreeOrderToken: paymentSessionId
+            $or: [
+                { cashfreeOrderToken: cleanedSessionId },
+                { cashfreePaymentId: cleanedSessionId }
+            ]
         });
 
         if (transaction) {
