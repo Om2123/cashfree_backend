@@ -460,6 +460,45 @@ exports.getAllPayouts = async (req, res) => {
     }
 };
 
+// ============ APPROVE PAYOUT REQUEST ============
+exports.approvePayoutRequest = async (req, res) => {
+    try {
+        const { payoutId } = req.params;
+        const { notes } = req.body;
+
+        // Find payout in requested state
+        const payout = await Payout.findOne({ payoutId });
+        if (!payout) {
+            return res.status(404).json({ success: false, error: 'Payout not found' });
+        }
+        if (payout.status !== 'requested') {
+            return res.status(400).json({ success: false, error: `Only requested payouts can be approved. Current status: ${payout.status}` });
+        }
+
+        // Approve metadata
+        payout.approvedBy = req.user._id;
+        payout.approvedByName = req.user.name;
+        payout.approvedAt = new Date();
+        payout.notes = notes || payout.notes;
+        payout.status = 'pending';
+        await payout.save();
+
+        return res.json({
+            success: true,
+            message: 'Payout approved and moved to pending for processing',
+            payout: {
+                payoutId: payout.payoutId,
+                status: payout.status,
+                approvedAt: payout.approvedAt,
+                approvedBy: payout.approvedByName
+            }
+        });
+    } catch (error) {
+        console.error('❌ Approve Payout Error:', error);
+        res.status(500).json({ success: false, error: 'Failed to approve payout' });
+    }
+};
+
 // ============ GET MERCHANT BALANCE ============
 exports.getMerchantBalance = async (req, res) => {
     try {
