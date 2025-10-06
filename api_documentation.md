@@ -68,7 +68,7 @@ This endpoint generates a new API key for your account.
 
 ```json
 {
-  "apiKey": "cashcavash_xxxxxxxxxxxxxxxxxxxxxxxx"
+  "apiKey": "ninexgroup_xxxxxxxxxxxxxxxxxxxxxxxx"
 }
 ```
 

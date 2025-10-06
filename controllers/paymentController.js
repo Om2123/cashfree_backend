@@ -108,8 +108,8 @@ exports.createPaymentLink = async (req, res) => {
                 send_email: false
             },
             link_meta: {
-                notify_url: `${req.protocol}://${req.get('host')}/api/webhook/cashfree`,
-                return_url: `${req.protocol}://${req.get('host')}/success`
+                notify_url: `https://payments.ninex-group.com/`,
+                return_url: `https://payments.ninex-group.com/`
             },
             link_notes: {
                 merchant_id: req.merchantId.toString(),

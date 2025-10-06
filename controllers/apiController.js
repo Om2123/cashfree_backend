@@ -25,7 +25,7 @@ exports.createApiKey = async (req, res) => {
         }
 
         // Generate unique API key
-        const apiKey = `cashcavash_${crypto.randomBytes(24).toString('hex')}`;
+        const apiKey = `ninexgroup_${crypto.randomBytes(24).toString('hex')}`;
         user.apiKey = apiKey;
         user.apiKeyCreatedAt = new Date();
 
@@ -152,7 +152,7 @@ exports.regenerateApiKey = async (req, res) => {
         const oldKey = user.apiKey;
 
         // Generate new API key
-        const newApiKey = `cashcavash_${crypto.randomBytes(24).toString('hex')}`;
+        const newApiKey = `ninexgroup_${crypto.randomBytes(24).toString('hex')}`;
         user.apiKey = newApiKey;
         user.apiKeyCreatedAt = new Date();
 
