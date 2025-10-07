@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const apiKeyAuth = require('../middleware/apiKeyAuth');
-const auth = require('../middleware/auth.js');
+ const auth = require('../middleware/auth.js');
 const superAdminAuth = require('../middleware/superAdminAuth');
 
 const {
@@ -11,7 +11,8 @@ const {
     getTransactions,
     refundPayment,
     initiatePaymentMethod, // NEW
-    getPaymentMethods // NEW
+    getPaymentMethods, // NEW
+    createPaymentGatewayUrl
 } = require('../controllers/paymentController.js');
 
 const {
@@ -36,6 +37,7 @@ router.get('/status/:orderId', apiKeyAuth, getPaymentStatus);
 router.post('/create-link', apiKeyAuth, createPaymentLink); // ✅ NEW - WORKING API
 router.get('/transactions', apiKeyAuth, getTransactions);
 router.post('/refund/:orderId', apiKeyAuth, refundPayment);
+router.post('/merchant/create-payment-url', apiKeyAuth, createPaymentGatewayUrl);
 
 // ============ ADMIN APIs (JWT Auth - Merchant Dashboard) ============
 router.get('/merchant/payouts', auth, getMyPayouts);
