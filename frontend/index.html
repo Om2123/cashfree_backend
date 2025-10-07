@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ninex Group - Secure Payment</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <svg xmlns="http://www.w3.org/2000/svg" width="150" height="40" viewBox="0 0 150 40">
+                    <text x="5" y="30" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#333">NINEX</text>
+                    <text x="85" y="30" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#007bff">GROUP</text>
+                </svg>
+            </div>
+        </header>
+        <main class="payment-box">
+            <h1>Complete Your Payment</h1>
+            <p class="merchant-name">Payment to Ninex Group</p>
+            <div class="payment-details">
+                <div class="detail-row">
+                    <span>Amount</span>
+                    <span id="amount">--.--</span>
+                </div>
+                <div class="detail-row">
+                    <span>Order ID</span>
+                    <span id="order-id">------------</span>
+                </div>
+            </div>
+            <button id="pay-btn" class="pay-button">Pay Now</button>
+        </main>
+        <footer class="footer">
+            <p>Powered by <a href="https://www.cashfree.com/" target="_blank">Cashfree</a></p>
+            <p>&copy; 2025 Ninex Group. All rights reserved.</p>
+        </footer>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

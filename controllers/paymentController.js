@@ -1105,6 +1105,154 @@ exports.initiatePaymentMethod = async (req, res) => {
     }
 };
 
+exports.createPaymentGatewayUrl = async (req, res) => {
+    try {
+        const {
+            orderId,
+            amount,
+            currency = 'INR',
+            customerName,
+            customerEmail,
+            customerPhone,
+            description,
+            returnUrl,
+            notifyUrl
+        } = req.body;
+
+        // Validation
+        if (!amount || !customerName || !customerEmail || !customerPhone) {
+            return res.status(400).json({
+                success: false,
+                error: 'amount, customerName, customerEmail, and customerPhone are required'
+            });
+        }
+
+        if (!req.merchantId || !req.merchantName) {
+            return res.status(401).json({
+                success: false,
+                error: 'Authentication failed. Invalid API key.'
+            });
+        }
+
+        // Validate amount
+        const paymentAmount = parseFloat(amount);
+        if (paymentAmount < 1 || paymentAmount > 500000) {
+            return res.status(400).json({
+                success: false,
+                error: 'Amount must be between ₹1 and ₹5,00,000'
+            });
+        }
+
+        // Clean phone number
+        const cleanPhone = customerPhone.replace(/[\s+\-()]/g, '');
+        if (cleanPhone.length !== 10 || !/^\d{10}$/.test(cleanPhone)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Phone number must be 10 digits (Indian format)'
+            });
+        }
+
+        // Validate email
+        const emailRegex = /[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(customerEmail)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid email format'
+            });
+        }
+
+        // Generate IDs
+        const finalOrderId = orderId || `ORD_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+        const transactionId = `TXN_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+        const customerId = `CUST_${cleanPhone}_${Date.now()}`;
+
+        // Create Cashfree Order
+        const cashfreeOrder = {
+            order_id: finalOrderId,
+            order_amount: paymentAmount,
+            order_currency: currency,
+            customer_details: {
+                customer_id: customerId,
+                customer_name: customerName,
+                customer_email: customerEmail,
+                customer_phone: cleanPhone
+            },
+            order_meta: {
+                return_url: returnUrl || `${req.protocol}://${req.get('host')}/success`,
+                notify_url: notifyUrl || `${req.protocol}://${req.get('host')}/webhook`
+            },
+            order_note: description || `Order for ${req.merchantName}`,
+            order_tags: {
+                merchant_id: req.merchantId.toString(),
+                merchant_name: req.merchantName,
+                transaction_id: transactionId,
+                platform: 'cashcavash'
+            }
+        };
+
+        console.log(`📤 Creating Cashfree order for URL generation: ${finalOrderId}`);
+        
+        const response = await cashfreePG.post('/orders', cashfreeOrder);
+        
+        let paymentSessionId = response.data.payment_session_id;
+        const cfOrderId = response.data.cf_order_id;
+        
+        paymentSessionId = cleanSessionId(paymentSessionId);
+        
+        if (!paymentSessionId) {
+            console.error('❌ No payment_session_id after cleaning');
+            throw new Error('Invalid payment session ID received from Cashfree');
+        }
+
+        // Save transaction
+        const transaction = new Transaction({
+            transactionId,
+            orderId: finalOrderId,
+            merchantId: req.merchantId,
+            merchantName: req.merchantName,
+            customerId,
+            customerName,
+            customerEmail,
+            customerPhone: cleanPhone,
+            amount: paymentAmount,
+            currency,
+            description: description || '',
+            status: 'created',
+            cashfreeOrderToken: paymentSessionId,
+            cashfreeOrderId: cfOrderId,
+            cashfreePaymentId: paymentSessionId
+        });
+
+        await transaction.save();
+
+        console.log(`✅ Transaction saved for URL generation: ${transactionId}`);
+
+        const paymentUrl = `http://localhost:3000/frontend/?payment_session_id=${paymentSessionId}`;
+
+        res.json({
+            success: true,
+            payment_url: paymentUrl,
+            order_id: finalOrderId,
+            amount: paymentAmount,
+            customer_email: customerEmail
+        });
+
+    } catch (error) {
+        console.error('❌ Create Payment Gateway URL Error:', error.response?.data || error.message);
+        
+        const errorMessage = error.response?.data?.message || 
+                           error.response?.data?.error?.message ||
+                           error.message ||
+                           'Failed to create payment gateway URL';
+
+        res.status(error.response?.status || 500).json({
+            success: false,
+            error: errorMessage,
+            details: error.response?.data || null
+        });
+    }
+};
+
 // ============ GET AVAILABLE PAYMENT METHODS ============
 exports.getPaymentMethods = async (req, res) => {
     try {

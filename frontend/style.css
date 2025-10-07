@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');
+
+body {
+    font-family: 'Poppins', sans-serif;
+    background-color: #f4f7f9;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+}
+
+.container {
+    width: 100%;
+    max-width: 420px;
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+}
+
+.header {
+    padding: 20px 30px;
+    border-bottom: 1px solid #e9ecef;
+    text-align: center;
+}
+
+.logo svg text {
+    font-size: 28px;
+}
+
+.payment-box {
+    padding: 30px;
+    text-align: center;
+}
+
+h1 {
+    font-size: 24px;
+    font-weight: 700;
+    color: #343a40;
+    margin-top: 0;
+    margin-bottom: 10px;
+}
+
+.merchant-name {
+    font-size: 16px;
+    color: #6c757d;
+    margin-bottom: 30px;
+}
+
+.payment-details {
+    margin-bottom: 30px;
+}
+
+.detail-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 16px;
+    padding: 15px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.detail-row:last-child {
+    border-bottom: none;
+}
+
+.detail-row span:first-child {
+    color: #6c757d;
+}
+
+.detail-row span:last-child {
+    font-weight: 600;
+    color: #343a40;
+}
+
+.pay-button {
+    width: 100%;
+    padding: 15px;
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    background: #007bff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.pay-button:hover {
+    background: #0056b3;
+}
+
+.footer {
+    padding: 20px 30px;
+    border-top: 1px solid #e9ecef;
+    text-align: center;
+    font-size: 12px;
+    color: #6c757d;
+}
+
+.footer a {
+    color: #007bff;
+    text-decoration: none;
+}
+
+.footer a:hover {
+    text-decoration: underline;
+}
+
+.footer p {
+    margin: 5px 0 0;
+}
