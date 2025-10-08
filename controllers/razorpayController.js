@@ -1,6 +1,7 @@
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const Transaction = require('../models/Transaction');
+const { sendMerchantWebhook } = require('./merchantWebhookController');
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -11,7 +12,16 @@ const razorpay = new Razorpay({
 // ============ CREATE RAZORPAY PAYMENT LINK ============
 exports.createRazorpayPaymentLink = async (req, res) => {
     try {
-        const { amount, customer_name, customer_email, customer_phone, description } = req.body;
+        const { 
+            amount, 
+            customer_name, 
+            customer_email, 
+            customer_phone, 
+            description,
+            callback_url,      // ✅ NEW: Optional merchant callback URL
+            success_url,       // ✅ NEW: Optional success redirect
+            failure_url        // ✅ NEW: Optional failure redirect
+        } = req.body;
 
         // Get merchant info from apiKeyAuth middleware
         const merchantId = req.merchantId;
@@ -55,9 +65,17 @@ exports.createRazorpayPaymentLink = async (req, res) => {
         const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substring(7)}`;
         const referenceId = `REF_${Date.now()}`;
 
+        // ✅ Get merchant's configured URLs or use provided ones
+        const merchant = await User.findById(merchantId);
+        
+        // Priority: API provided URL > Merchant configured URL > Default URL
+        const finalCallbackUrl = callback_url || 
+                                merchant.successUrl || 
+                                `${process.env.FRONTEND_URL}/razorpay-success.html`;
+
         // Create Payment Link options
         const paymentLinkOptions = {
-            amount: parseFloat(amount) * 100, // Amount in paise (smallest currency unit)
+            amount: parseFloat(amount) * 100,
             currency: 'INR',
             description: description || `Payment for ${merchantName}`,
             customer: {
@@ -70,12 +88,13 @@ exports.createRazorpayPaymentLink = async (req, res) => {
                 email: true
             },
             reminder_enable: true,
-            callback_url: `${process.env.FRONTEND_URL}/razorpay-success.html`,
+            callback_url: `${finalCallbackUrl}?transaction_id=${transactionId}&status=success`, // ✅ Merchant's URL
             callback_method: 'get',
             reference_id: referenceId
         };
 
         console.log('📤 Creating Razorpay Payment Link...');
+        console.log('🔗 Callback URL:', finalCallbackUrl);
 
         // Create Payment Link
         const paymentLink = await razorpay.paymentLink.create(paymentLinkOptions);
@@ -108,6 +127,11 @@ exports.createRazorpayPaymentLink = async (req, res) => {
             razorpayPaymentLinkId: paymentLink.id,
             razorpayReferenceId: referenceId,
             
+            // ✅ Store callback URLs
+            callbackUrl: finalCallbackUrl,
+            successUrl: success_url,
+            failureUrl: failure_url,
+            
             // Timestamps
             createdAt: new Date(),
             updatedAt: new Date()
@@ -126,6 +150,7 @@ exports.createRazorpayPaymentLink = async (req, res) => {
             merchant_id: merchantId.toString(),
             merchant_name: merchantName,
             reference_id: referenceId,
+            callback_url: finalCallbackUrl,
             expires_at: paymentLink.expire_by,
             message: 'Payment link created successfully. Share this URL with customer.'
         });
@@ -139,6 +164,7 @@ exports.createRazorpayPaymentLink = async (req, res) => {
         });
     }
 };
+
 
 // ============ RAZORPAY WEBHOOK HANDLER ============
 exports.handleRazorpayWebhook = async (req, res) => {
@@ -211,6 +237,8 @@ exports.handleRazorpayWebhook = async (req, res) => {
 };
 
 // ============ HELPER: Handle Payment Link Paid ============
+
+// ============ HELPER: Handle Payment Link Paid ============
 async function handlePaymentLinkPaid(payload) {
     try {
         const paymentLink = payload.payment_link.entity;
@@ -218,12 +246,13 @@ async function handlePaymentLinkPaid(payload) {
 
         console.log('✅ Payment Link Paid:', paymentLink.id);
 
-        // Update transaction
+        // Update transaction (populate merchant data)
         const transaction = await Transaction.findOne({ 
             razorpayPaymentLinkId: paymentLink.id 
-        });
+        }).populate('merchantId');
 
         if (transaction) {
+            // Update transaction status
             transaction.status = 'paid';
             transaction.paidAt = new Date(payment.created_at * 1000);
             transaction.paymentMethod = payment.method;
@@ -234,7 +263,68 @@ async function handlePaymentLinkPaid(payload) {
 
             await transaction.save();
             console.log('💾 Transaction updated to PAID:', transaction.transactionId);
+
+            // ✅ SEND WEBHOOK TO MERCHANT
+            if (transaction.merchantId) {
+                const merchant = transaction.merchantId;
+                
+                // Check if merchant wants this event
+                if (merchant.webhookEnabled && merchant.webhookEvents.includes('payment.success')) {
+                    
+                    const merchantPayload = {
+                        event: 'payment.success',
+                        timestamp: new Date().toISOString(),
+                        transaction_id: transaction.transactionId,
+                        order_id: transaction.orderId,
+                        merchant_id: merchant._id.toString(),
+                        data: {
+                            transaction_id: transaction.transactionId,
+                            payment_link_id: paymentLink.id,
+                            razorpay_payment_id: payment.id,
+                            razorpay_order_id: payment.order_id,
+                            razorpay_signature: payment.acquirer_data?.bank_transaction_id,
+                            
+                            amount: transaction.amount,
+                            currency: transaction.currency,
+                            status: 'paid',
+                            payment_method: payment.method,
+                            payment_gateway: 'razorpay',
+                            paid_at: transaction.paidAt,
+                            
+                            customer: {
+                                customer_id: transaction.customerId,
+                                name: transaction.customerName,
+                                email: transaction.customerEmail,
+                                phone: transaction.customerPhone
+                            },
+                            
+                            description: transaction.description,
+                            created_at: transaction.createdAt
+                        }
+                    };
+
+                    console.log('📤 Sending webhook to merchant:', merchant.name);
+
+                    // Send webhook (non-blocking)
+                    sendMerchantWebhook(merchant, merchantPayload)
+                        .then(result => {
+                            if (result.success) {
+                                console.log('✅ Merchant webhook delivered successfully');
+                            } else {
+                                console.error('❌ Merchant webhook failed:', result.error);
+                            }
+                        })
+                        .catch(err => {
+                            console.error('❌ Merchant webhook error:', err.message);
+                        });
+                } else {
+                    console.log('⚠️ Merchant webhook not configured or not subscribed to payment.success');
+                }
+            }
+        } else {
+            console.warn('⚠️ Transaction not found for payment link:', paymentLink.id);
         }
+
     } catch (error) {
         console.error('❌ Handle Payment Link Paid Error:', error.message);
     }
@@ -249,7 +339,7 @@ async function handlePaymentLinkCancelled(payload) {
 
         const transaction = await Transaction.findOne({ 
             razorpayPaymentLinkId: paymentLink.id 
-        });
+        }).populate('merchantId');
 
         if (transaction) {
             transaction.status = 'cancelled';
@@ -258,6 +348,36 @@ async function handlePaymentLinkCancelled(payload) {
 
             await transaction.save();
             console.log('💾 Transaction updated to CANCELLED');
+
+            // ✅ SEND WEBHOOK TO MERCHANT
+            if (transaction.merchantId && transaction.merchantId.webhookEnabled) {
+                const merchant = transaction.merchantId;
+
+                if (merchant.webhookEvents.includes('payment.cancelled')) {
+                    const merchantPayload = {
+                        event: 'payment.cancelled',
+                        timestamp: new Date().toISOString(),
+                        transaction_id: transaction.transactionId,
+                        order_id: transaction.orderId,
+                        merchant_id: merchant._id.toString(),
+                        data: {
+                            transaction_id: transaction.transactionId,
+                            payment_link_id: paymentLink.id,
+                            amount: transaction.amount,
+                            currency: transaction.currency,
+                            status: 'cancelled',
+                            payment_gateway: 'razorpay',
+                            customer: {
+                                name: transaction.customerName,
+                                email: transaction.customerEmail,
+                                phone: transaction.customerPhone
+                            }
+                        }
+                    };
+
+                    sendMerchantWebhook(merchant, merchantPayload);
+                }
+            }
         }
     } catch (error) {
         console.error('❌ Handle Payment Link Cancelled Error:', error.message);
@@ -273,7 +393,7 @@ async function handlePaymentLinkExpired(payload) {
 
         const transaction = await Transaction.findOne({ 
             razorpayPaymentLinkId: paymentLink.id 
-        });
+        }).populate('merchantId');
 
         if (transaction) {
             transaction.status = 'expired';
@@ -282,6 +402,36 @@ async function handlePaymentLinkExpired(payload) {
 
             await transaction.save();
             console.log('💾 Transaction updated to EXPIRED');
+
+            // ✅ SEND WEBHOOK TO MERCHANT
+            if (transaction.merchantId && transaction.merchantId.webhookEnabled) {
+                const merchant = transaction.merchantId;
+
+                if (merchant.webhookEvents.includes('payment.expired')) {
+                    const merchantPayload = {
+                        event: 'payment.expired',
+                        timestamp: new Date().toISOString(),
+                        transaction_id: transaction.transactionId,
+                        order_id: transaction.orderId,
+                        merchant_id: merchant._id.toString(),
+                        data: {
+                            transaction_id: transaction.transactionId,
+                            payment_link_id: paymentLink.id,
+                            amount: transaction.amount,
+                            currency: transaction.currency,
+                            status: 'expired',
+                            payment_gateway: 'razorpay',
+                            customer: {
+                                name: transaction.customerName,
+                                email: transaction.customerEmail,
+                                phone: transaction.customerPhone
+                            }
+                        }
+                    };
+
+                    sendMerchantWebhook(merchant, merchantPayload);
+                }
+            }
         }
     } catch (error) {
         console.error('❌ Handle Payment Link Expired Error:', error.message);
@@ -297,7 +447,7 @@ async function handlePaymentCaptured(payload) {
 
         const transaction = await Transaction.findOne({ 
             razorpayPaymentId: payment.id 
-        });
+        }).populate('merchantId');
 
         if (transaction && transaction.status !== 'paid') {
             transaction.status = 'paid';
@@ -308,6 +458,8 @@ async function handlePaymentCaptured(payload) {
 
             await transaction.save();
             console.log('💾 Payment captured and transaction updated');
+
+            // Merchant webhook already sent in handlePaymentLinkPaid
         }
     } catch (error) {
         console.error('❌ Handle Payment Captured Error:', error.message);
@@ -323,16 +475,49 @@ async function handlePaymentFailed(payload) {
 
         const transaction = await Transaction.findOne({ 
             razorpayOrderId: payment.order_id 
-        });
+        }).populate('merchantId');
 
         if (transaction) {
             transaction.status = 'failed';
-            transaction.failureReason = payment.error_description;
+            transaction.failureReason = payment.error_description || 'Payment failed';
             transaction.webhookData = payload;
             transaction.updatedAt = new Date();
 
             await transaction.save();
             console.log('💾 Transaction updated to FAILED');
+
+            // ✅ SEND WEBHOOK TO MERCHANT
+            if (transaction.merchantId && transaction.merchantId.webhookEnabled) {
+                const merchant = transaction.merchantId;
+
+                if (merchant.webhookEvents.includes('payment.failed')) {
+                    const merchantPayload = {
+                        event: 'payment.failed',
+                        timestamp: new Date().toISOString(),
+                        transaction_id: transaction.transactionId,
+                        order_id: transaction.orderId,
+                        merchant_id: merchant._id.toString(),
+                        data: {
+                            transaction_id: transaction.transactionId,
+                            razorpay_payment_id: payment.id,
+                            razorpay_order_id: payment.order_id,
+                            amount: transaction.amount,
+                            currency: transaction.currency,
+                            status: 'failed',
+                            failure_reason: payment.error_description,
+                            error_code: payment.error_code,
+                            payment_gateway: 'razorpay',
+                            customer: {
+                                name: transaction.customerName,
+                                email: transaction.customerEmail,
+                                phone: transaction.customerPhone
+                            }
+                        }
+                    };
+
+                    sendMerchantWebhook(merchant, merchantPayload);
+                }
+            }
         }
     } catch (error) {
         console.error('❌ Handle Payment Failed Error:', error.message);
@@ -394,9 +579,3 @@ exports.verifyRazorpayPayment = async (req, res) => {
         });
     }
 };
-
-// module.exports = {
-//     createRazorpayPaymentLink,
-//     handleRazorpayWebhook,
-//     verifyRazorpayPayment
-// };
