@@ -17,11 +17,15 @@ const TransactionSchema = new mongoose.Schema({
         required: true,
     },
     // Add these fields to your existing Transaction model
-razorpayPaymentLinkId: String,
-razorpayPaymentId: String,
-razorpayOrderId: String,
-razorpayReferenceId: String,
-paymentGateway: String, // 'razorpay' or 'cashfree'
+    razorpayPaymentLinkId: String,
+    razorpayPaymentId: String,
+    razorpayOrderId: String,
+    razorpayReferenceId: String,
+    paymentGateway: String, // 'razorpay' or 'cashfree'
+    // Add to Transaction model
+    callbackUrl: String,
+    successUrl: String,
+    failureUrl: String,
 
     merchantName: {
         type: String,
@@ -90,7 +94,7 @@ paymentGateway: String, // 'razorpay' or 'cashfree'
     },
 });
 
-TransactionSchema.pre('save', function(next) {
+TransactionSchema.pre('save', function (next) {
     this.updatedAt = Date.now();
     next();
 });
