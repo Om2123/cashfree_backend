@@ -12,7 +12,13 @@ const app = express();
 app.use(cors());
 
 app.use(express.json());
-
+app.use(
+    express.json({
+        verify: (req, res, buf) => {
+            req.rawBody = buf.toString(); // Store raw body as string
+        }
+    })
+);
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', require('./routes/apiRoutes'));

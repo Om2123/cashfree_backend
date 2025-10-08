@@ -315,8 +315,7 @@ exports.createPayment = async (req, res) => {
         console.log(`✅ Transaction saved: ${transactionId}`);
 
         // Build payment URL with CLEANED session ID
-        const paymentUrl = `https://payments.cashfree.com/order/#/checkout?order_token=${paymentSessionId}`;
-
+ 
         res.json({
             success: true,
             transaction: {
@@ -333,8 +332,7 @@ exports.createPayment = async (req, res) => {
                 createdAt: transaction.createdAt
             },
             payment: {
-                paymentUrl,
-                paymentSessionId: paymentSessionId, // ✅ Return cleaned value
+                 paymentSessionId: paymentSessionId, // ✅ Return cleaned value
                 expiresAt: response.data.order_expiry_time
             },
             message: 'Payment created successfully. Redirect customer to paymentUrl.'
@@ -530,7 +528,7 @@ exports.initiatePaymentMethod = async (req, res) => {
         console.log('📤 Cashfree Order Pay payload:', JSON.stringify(paymentPayload, null, 2));
 
         // Call Cashfree Order Pay API
-        const response = await cashfreePG.post('/orders/pay', paymentPayload);
+        const response = await cashfreePG.post('/orders/sessions', paymentPayload);
 
         console.log('✅ Cashfree Order Pay response received');
 
@@ -1011,7 +1009,7 @@ exports.initiatePaymentMethod = async (req, res) => {
         console.log('📤 Cashfree Order Pay payload:', JSON.stringify(paymentPayload, null, 2));
 
         // Call Cashfree Order Pay API
-        const response = await cashfreePG.post('/orders/pay', paymentPayload);
+        const response = await cashfreePG.post('/orders/session', paymentPayload);
 
         console.log('✅ Cashfree Order Pay response:', response.data);
 
@@ -1178,15 +1176,15 @@ exports.createPaymentGatewayUrl = async (req, res) => {
                 customer_phone: cleanPhone
             },
             order_meta: {
-                return_url: returnUrl || `${req.protocol}://${req.get('host')}/success`,
-                notify_url: notifyUrl || `${req.protocol}://${req.get('host')}/webhook`
+                return_url: returnUrl || `https://${req.get('host')}/success`,
+                notify_url: notifyUrl || `https://${req.get('host')}/webhook`
             },
             order_note: description || `Order for ${req.merchantName}`,
             order_tags: {
                 merchant_id: req.merchantId.toString(),
                 merchant_name: req.merchantName,
                 transaction_id: transactionId,
-                platform: 'cashcavash'
+                platform: 'ninexgroup'
             }
         };
 
@@ -1227,7 +1225,7 @@ exports.createPaymentGatewayUrl = async (req, res) => {
 
         console.log(`✅ Transaction saved for URL generation: ${transactionId}`);
 
-        const paymentUrl = `http://localhost:3000/frontend/?payment_session_id=${paymentSessionId}`;
+        const paymentUrl = `https://payment.himora.art/?payment_session_id=${paymentSessionId}`;
 
         res.json({
             success: true,
@@ -1254,6 +1252,7 @@ exports.createPaymentGatewayUrl = async (req, res) => {
 };
 
 // ============ GET AVAILABLE PAYMENT METHODS ============
+// ============ GET AVAILABLE PAYMENT METHODS ============
 exports.getPaymentMethods = async (req, res) => {
     try {
         const { orderId, paymentSessionId } = req.query;
@@ -1265,14 +1264,35 @@ exports.getPaymentMethods = async (req, res) => {
             });
         }
 
-        let sessionId = paymentSessionId;
+        let transaction;
+        let finalOrderId = orderId;
 
-        // If orderId provided, get session ID from transaction
-        if (orderId && !paymentSessionId) {
-            const transaction = await Transaction.findOne({
-                orderId,
-                merchantId: req.merchantId
+        // If only paymentSessionId provided, find transaction
+        if (paymentSessionId && !orderId) {
+            const cleanedSessionId = cleanSessionId(paymentSessionId);
+            
+            transaction = await Transaction.findOne({
+                $or: [
+                    { cashfreeOrderToken: cleanedSessionId },
+                    { cashfreePaymentId: cleanedSessionId }
+                ]
             });
+
+            if (transaction) {
+                finalOrderId = transaction.orderId;
+            } else {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Transaction not found for this payment session'
+                });
+            }
+        }
+
+        // If orderId provided, get transaction details
+        if (finalOrderId) {
+            if (!transaction) {
+                transaction = await Transaction.findOne({ orderId: finalOrderId });
+            }
 
             if (!transaction) {
                 return res.status(404).json({
@@ -1281,44 +1301,428 @@ exports.getPaymentMethods = async (req, res) => {
                 });
             }
 
-            sessionId = transaction.cashfreeOrderToken;
-        }
+            // ✅ Use correct Cashfree endpoint: GET /orders/{order_id}
+            const response = await cashfreePG.get(`/orders/${finalOrderId}`);
 
-        // Get order details from Cashfree
-        const response = await cashfreePG.get(`/orders/sessions/${sessionId}`);
-
-        res.json({
-            success: true,
-            available_payment_methods: response.data.payment_methods || {
-                upi: {
-                    enabled: true,
-                    channels: ['collect', 'intent', 'qrcode']
+            res.json({
+                success: true,
+                order_details: {
+                    order_id: response.data.order_id,
+                    order_amount: response.data.order_amount,
+                    order_currency: response.data.order_currency,
+                    order_status: response.data.order_status,
+                    customer_details: response.data.customer_details
                 },
-                card: {
-                    enabled: true,
-                    types: ['credit', 'debit']
-                },
-                netbanking: {
-                    enabled: true,
-                    banks: ['SBI', 'HDFC', 'ICICI', 'Axis']
-                },
-                wallet: {
-                    enabled: true,
-                    providers: ['paytm', 'phonepe', 'freecharge']
+                payment_session_id: transaction.cashfreeOrderToken,
+                available_payment_methods: {
+                    upi: {
+                        enabled: true,
+                        channels: ['collect', 'intent', 'qrcode']
+                    },
+                    card: {
+                        enabled: true,
+                        types: ['credit', 'debit']
+                    },
+                    netbanking: {
+                        enabled: true,
+                        banks: ['SBI', 'HDFC', 'ICICI', 'Axis', 'Kotak']
+                    },
+                    wallet: {
+                        enabled: true,
+                        providers: ['paytm', 'phonepe', 'freecharge', 'mobikwik']
+                    }
                 }
-            },
-            order_details: {
-                order_id: response.data.order_id,
-                order_amount: response.data.order_amount,
-                order_currency: response.data.order_currency
-            }
-        });
+            });
+        }
 
     } catch (error) {
         console.error('❌ Get Payment Methods Error:', error.response?.data || error.message);
-        res.status(500).json({
+        res.status(error.response?.status || 500).json({
             success: false,
-            error: 'Failed to fetch payment methods'
+            error: error.response?.data?.message || 'Failed to fetch payment methods',
+            details: error.response?.data || null
+        });
+    }
+};
+// ============ CREATE PAYMENT URL (All-in-One API) ============
+exports.createPaymentURL = async (req, res) => {
+    try {
+        const { amount, customer_name, customer_email, customer_phone, description } = req.body;
+
+        // ✅ Get merchant info from apiKeyAuth middleware
+        const merchantId = req.merchantId;
+        const merchantName = req.merchantName;
+
+        console.log('📤 Payment request from merchant:', {
+            merchantId: merchantId.toString(),
+            merchantName: merchantName,
+            amount: amount
+        });
+
+        // Validate input
+        if (!amount || !customer_name || !customer_email || !customer_phone) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: amount, customer_name, customer_email, customer_phone'
+            });
+        }
+
+        // Validate phone number (10 digits)
+        if (!/^[0-9]{10}$/.test(customer_phone)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid phone number. Must be 10 digits.'
+            });
+        }
+
+        // Validate email
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer_email)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid email address'
+            });
+        }
+
+        // Validate amount
+        if (parseFloat(amount) < 1) {
+            return res.status(400).json({
+                success: false,
+                error: 'Amount must be at least ₹1'
+            });
+        }
+
+        // Generate unique IDs
+        const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const orderId = `ORD_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const customerId = `CUST_${customer_phone}_${Date.now()}`;
+
+        // Create order request for Cashfree
+        const orderRequest = {
+            order_amount: parseFloat(amount),
+            order_currency: "INR",
+            order_id: orderId,
+            customer_details: {
+                customer_id: customerId,
+                customer_name: customer_name,
+                customer_email: customer_email,
+                customer_phone: customer_phone
+            },
+            order_meta: {
+                return_url: `${process.env.FRONTEND_URL}/success.html?order_id={order_id}`,
+                notify_url: `${process.env.BACKEND_URL}/api/payments/webhook`
+            },
+            order_note: description || `Payment for ${merchantName}`
+        };
+
+        console.log('📤 Creating Cashfree order:', orderId);
+
+        // Call Cashfree API to create order
+        const response = await cashfreePG.post('/orders', orderRequest);
+
+        console.log('✅ Cashfree order created:', response.data.order_id);
+        console.log('🔑 Payment Session ID:', response.data.payment_session_id);
+
+        // ✅ Save transaction to database matching your schema
+        const transaction = new Transaction({
+            transactionId: transactionId,
+            orderId: response.data.order_id,
+            merchantId: merchantId,
+            merchantName: merchantName,
+            
+            // Customer Details
+            customerId: customerId,
+            customerName: customer_name,
+            customerEmail: customer_email,
+            customerPhone: customer_phone,
+            
+            // Payment Details
+            amount: parseFloat(amount),
+            currency: 'INR',
+            description: description || `Payment for ${merchantName}`,
+            
+            // Status
+            status: 'created',
+            
+            // Cashfree Data
+            cashfreeOrderToken: response.data.payment_session_id,
+            cashfreeOrderId: response.data.order_id,
+            cashfreePaymentId: null, // Will be updated after payment
+            paymentMethod: null, // Will be updated by webhook
+            
+            // Timestamps
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
+
+        await transaction.save();
+        console.log('💾 Transaction saved:', transactionId);
+
+        // Generate payment URL
+        const paymentURL = `${process.env.FRONTEND_URL}?payment_session_id=${response.data.payment_session_id}&order_id=${response.data.order_id}`;
+
+        res.json({
+            success: true,
+            transaction_id: transactionId,
+            order_id: response.data.order_id,
+            payment_url: paymentURL,
+            payment_session_id: response.data.payment_session_id,
+            order_amount: response.data.order_amount,
+            order_currency: response.data.order_currency,
+            merchant_id: merchantId.toString(),
+            merchant_name: merchantName,
+            message: 'Payment URL generated successfully. Redirect user to this URL.'
+        });
+
+    } catch (error) {
+        console.error('❌ Create Payment URL Error:', error.response?.data || error.message);
+        res.status(error.response?.status || 500).json({
+            success: false,
+            error: error.response?.data?.message || 'Failed to create payment URL',
+            details: error.response?.data || null
+        });
+    }
+};
+
+// ============ WEBHOOK HANDLER (Payment Verification) ============
+exports.handleWebhook = async (req, res) => {
+    try {
+        console.log('🔔 Webhook received');
+        console.log('Headers:', req.headers);
+        console.log('Body:', req.body);
+
+        // Get webhook signature and timestamp from headers
+        const signature = req.headers['x-webhook-signature'];
+        const timestamp = req.headers['x-webhook-timestamp'];
+        const rawBody = req.rawBody;
+
+        if (!signature || !timestamp) {
+            console.error('❌ Missing signature or timestamp');
+            return res.status(400).json({
+                success: false,
+                error: 'Missing webhook signature or timestamp'
+            });
+        }
+
+        // Verify webhook signature
+        const isValid = verifyWebhookSignature(signature, timestamp, rawBody);
+
+        if (!isValid) {
+            console.error('❌ Invalid webhook signature');
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid webhook signature'
+            });
+        }
+
+        console.log('✅ Webhook signature verified');
+
+        // Parse webhook data
+        const webhookData = req.body;
+        const eventType = webhookData.type;
+        const orderData = webhookData.data;
+
+        console.log('📦 Event Type:', eventType);
+        console.log('📦 Order ID:', orderData.order?.order_id);
+
+        // Handle different webhook events
+        switch (eventType) {
+            case 'PAYMENT_SUCCESS_WEBHOOK':
+                await handlePaymentSuccess(orderData, webhookData);
+                break;
+
+            case 'PAYMENT_FAILED_WEBHOOK':
+                await handlePaymentFailed(orderData, webhookData);
+                break;
+
+            case 'PAYMENT_USER_DROPPED_WEBHOOK':
+                await handlePaymentDropped(orderData, webhookData);
+                break;
+
+            default:
+                console.log('⚠️ Unhandled webhook event:', eventType);
+        }
+
+        // Always return 200 OK to acknowledge receipt
+        res.status(200).json({
+            success: true,
+            message: 'Webhook received and processed'
+        });
+
+    } catch (error) {
+        console.error('❌ Webhook Handler Error:', error.message);
+        // Still return 200 to prevent retries
+        res.status(200).json({
+            success: false,
+            error: 'Webhook processing failed'
+        });
+    }
+};
+
+// ============ HELPER: Verify Webhook Signature ============
+function verifyWebhookSignature(receivedSignature, timestamp, rawBody) {
+    try {
+        const signatureData = timestamp + rawBody;
+        const generatedSignature = crypto
+            .createHmac('sha256', process.env.CASHFREE_SECRET_KEY)
+            .update(signatureData)
+            .digest('base64');
+
+        console.log('🔐 Generated Signature:', generatedSignature);
+        console.log('🔐 Received Signature:', receivedSignature);
+
+        return generatedSignature === receivedSignature;
+
+    } catch (error) {
+        console.error('❌ Signature verification error:', error.message);
+        return false;
+    }
+}
+
+// ============ HELPER: Handle Payment Success ============
+async function handlePaymentSuccess(orderData, webhookData) {
+    try {
+        const orderId = orderData.order?.order_id;
+        const paymentAmount = orderData.payment?.payment_amount;
+        const paymentTime = orderData.payment?.payment_time;
+        const paymentMethod = orderData.payment?.payment_group;
+        const cfPaymentId = orderData.payment?.cf_payment_id;
+
+        console.log('✅ Payment Success for Order:', orderId);
+
+        // Update transaction in database
+        const transaction = await Transaction.findOne({ orderId: orderId });
+
+        if (transaction) {
+            transaction.status = 'paid';
+            transaction.paidAt = new Date(paymentTime) || new Date();
+            transaction.paymentMethod = paymentMethod || 'Unknown';
+            transaction.cashfreePaymentId = cfPaymentId;
+            transaction.webhookData = webhookData;
+            transaction.updatedAt = new Date();
+
+            await transaction.save();
+            console.log('💾 Transaction updated to PAID:', transaction.transactionId);
+
+            // TODO: Add your business logic here
+            // - Send confirmation email
+            // - Update inventory
+            // - Trigger fulfillment
+            // - Send SMS notification
+            // - Update merchant balance
+
+        } else {
+            console.warn('⚠️ Transaction not found for order:', orderId);
+        }
+
+    } catch (error) {
+        console.error('❌ Handle Payment Success Error:', error.message);
+    }
+}
+
+// ============ HELPER: Handle Payment Failed ============
+async function handlePaymentFailed(orderData, webhookData) {
+    try {
+        const orderId = orderData.order?.order_id;
+        const errorMessage = orderData.payment?.payment_message;
+
+        console.log('❌ Payment Failed for Order:', orderId);
+        console.log('Error:', errorMessage);
+
+        // Update transaction in database
+        const transaction = await Transaction.findOne({ orderId: orderId });
+
+        if (transaction) {
+            transaction.status = 'failed';
+            transaction.failureReason = errorMessage;
+            transaction.webhookData = webhookData;
+            transaction.updatedAt = new Date();
+
+            await transaction.save();
+            console.log('💾 Transaction updated to FAILED:', transaction.transactionId);
+
+            // TODO: Send payment failed notification to customer
+        }
+
+    } catch (error) {
+        console.error('❌ Handle Payment Failed Error:', error.message);
+    }
+}
+
+// ============ HELPER: Handle Payment Dropped ============
+async function handlePaymentDropped(orderData, webhookData) {
+    try {
+        const orderId = orderData.order?.order_id;
+
+        console.log('⚠️ Payment Dropped for Order:', orderId);
+
+        // Update transaction in database
+        const transaction = await Transaction.findOne({ orderId: orderId });
+
+        if (transaction) {
+            transaction.status = 'cancelled';
+            transaction.webhookData = webhookData;
+            transaction.updatedAt = new Date();
+
+            await transaction.save();
+            console.log('💾 Transaction updated to CANCELLED:', transaction.transactionId);
+        }
+
+    } catch (error) {
+        console.error('❌ Handle Payment Dropped Error:', error.message);
+    }
+}
+
+// ============ VERIFY PAYMENT (Optional) ============
+exports.verifySimplePayment = async (req, res) => {
+    try {
+        const { order_id } = req.body;
+
+        if (!order_id) {
+            return res.status(400).json({
+                success: false,
+                error: 'order_id is required'
+            });
+        }
+
+        console.log('🔍 Verifying payment for order:', order_id);
+
+        // Fetch order status from Cashfree
+        const response = await cashfreePG.get(`/orders/${order_id}`);
+
+        console.log('✅ Order status from Cashfree:', response.data.order_status);
+
+        // Update transaction in database
+        const transaction = await Transaction.findOne({ orderId: order_id });
+        
+        if (transaction) {
+            // Update status based on Cashfree response
+            if (response.data.order_status === 'PAID' && transaction.status !== 'paid') {
+                transaction.status = 'paid';
+                transaction.paidAt = new Date();
+            }
+            
+            transaction.updatedAt = new Date();
+            await transaction.save();
+            console.log('💾 Transaction updated from verify');
+        }
+
+        res.json({
+            success: true,
+            transaction_id: transaction?.transactionId,
+            order_id: response.data.order_id,
+            order_amount: response.data.order_amount,
+            order_currency: response.data.order_currency,
+            order_status: response.data.order_status,
+            payment_time: response.data.order_meta?.payment_time || null,
+            customer_details: response.data.customer_details
+        });
+
+    } catch (error) {
+        console.error('❌ Verify Payment Error:', error.response?.data || error.message);
+        res.status(error.response?.status || 500).json({
+            success: false,
+            error: error.response?.data?.message || 'Failed to verify payment',
+            details: error.response?.data || null
         });
     }
 };
