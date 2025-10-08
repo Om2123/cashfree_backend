@@ -8,22 +8,23 @@ connectDB();
 
 const app = express();
 
-// Enable CORS for all origins
+// Enable CORS
 app.use(cors());
 
-app.use(express.json());
-app.use(
-    express.json({
-        verify: (req, res, buf) => {
-            req.rawBody = buf.toString(); // Store raw body as string
-        }
-    })
-);
+// Parse bodies
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json({
+    verify: (req, res, buf) => {
+        req.rawBody = buf.toString();
+    }
+}));
+
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', require('./routes/apiRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
- 
+app.use('/api/razorpay', require('./routes/razorpayRoutes')); // ✅ NEW
+
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => console.log(`🚀 CashCavash Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

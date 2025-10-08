@@ -16,6 +16,13 @@ const TransactionSchema = new mongoose.Schema({
         ref: 'User',
         required: true,
     },
+    // Add these fields to your existing Transaction model
+razorpayPaymentLinkId: String,
+razorpayPaymentId: String,
+razorpayOrderId: String,
+razorpayReferenceId: String,
+paymentGateway: String, // 'razorpay' or 'cashfree'
+
     merchantName: {
         type: String,
         required: true,
