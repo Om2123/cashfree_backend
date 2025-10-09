@@ -1,7 +1,307 @@
+
 const crypto = require('crypto');
 const Payout = require('../models/Payout');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
+const { calculatePayinCommission, calculatePayoutCommission } = require('../utils/commissionCalculator');
+
+// ============ GET MY BALANCE (Updated with real commission) ============
+exports.getMyBalance = async (req, res) => {
+    try {
+        console.log(`💰 Admin ${req.user.name} checking balance`);
+
+        // Get all successful transactions
+        const successfulTransactions = await Transaction.find({
+            merchantId: req.merchantId,
+            status: 'paid'
+        });
+
+        // Calculate total revenue and commission with real pricing
+        let totalRevenue = 0;
+        let totalCommission = 0;
+        let transactionCommissionDetails = [];
+
+        successfulTransactions.forEach(transaction => {
+            const amount = transaction.amount;
+            totalRevenue += amount;
+
+            // Calculate payin commission for each transaction
+            const commissionInfo = calculatePayinCommission(amount);
+            totalCommission += commissionInfo.commission;
+
+            transactionCommissionDetails.push({
+                transactionId: transaction.transactionId,
+                amount: amount,
+                commission: commissionInfo.commission,
+                isMinimumCharge: commissionInfo.isMinimumCharge
+            });
+        });
+
+        const totalRefunded = successfulTransactions.reduce((sum, t) => sum + (t.refundAmount || 0), 0);
+
+        // Get payouts
+        const completedPayouts = await Payout.find({
+            merchantId: req.merchantId,
+            status: 'completed'
+        });
+        const pendingPayouts = await Payout.find({
+            merchantId: req.merchantId,
+            status: { $in: ['requested', 'pending', 'processing'] }
+        });
+
+        const totalPaidOut = completedPayouts.reduce((sum, p) => sum + p.netAmount, 0);
+        const totalPending = pendingPayouts.reduce((sum, p) => sum + p.netAmount, 0);
+
+        const netRevenue = totalRevenue - totalRefunded - totalCommission;
+        const availableBalance = netRevenue - totalPaidOut - totalPending;
+
+        res.json({
+            success: true,
+            merchant: {
+                merchantId: req.merchantId,
+                merchantName: req.merchantName,
+                merchantEmail: req.user.email
+            },
+            balance: {
+                total_revenue: totalRevenue.toFixed(2),
+                total_refunded: totalRefunded.toFixed(2),
+                commission_deducted: totalCommission.toFixed(2),
+                commission_structure: {
+                    payin: '3.8% + 18% GST (Effective: 4.484%)',
+                    minimum_charge: '₹18 + 18% GST (₹21.24)',
+                    payout_500_to_1000: '₹30 + 18% GST (₹35.40)',
+                    payout_above_1000: '1.50% + 18% GST (1.77%)'
+                },
+                net_revenue: netRevenue.toFixed(2),
+                total_paid_out: totalPaidOut.toFixed(2),
+                pending_payouts: totalPending.toFixed(2),
+                available_balance: availableBalance.toFixed(2)
+            },
+            transaction_summary: {
+                total_transactions: successfulTransactions.length,
+                total_payouts_completed: completedPayouts.length,
+                pending_payout_requests: pendingPayouts.length,
+                avg_commission_per_transaction: (totalCommission / successfulTransactions.length).toFixed(2)
+            },
+            payout_eligibility: {
+                can_request_payout: availableBalance >= 500,
+                minimum_payout_amount: 500,
+                maximum_payout_amount: Math.min(availableBalance, 100000).toFixed(2)
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Get My Balance Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch balance'
+        });
+    }
+};
+
+// ============ REQUEST PAYOUT (Updated with real payout commission) ============
+exports.requestPayout = async (req, res) => {
+    try {
+        const {
+            amount,
+            transferMode,
+            beneficiaryDetails,
+            notes
+        } = req.body;
+
+        console.log(`💰 Admin ${req.user.name} requesting payout of ₹${amount}`);
+
+        // Validation
+        if (!amount || !transferMode || !beneficiaryDetails) {
+            return res.status(400).json({
+                success: false,
+                error: 'amount, transferMode, and beneficiaryDetails are required'
+            });
+        }
+
+        // Validate amount
+        const payoutAmount = parseFloat(amount);
+        
+        // ✅ UPDATED: Minimum payout is ₹500 (to match payout pricing)
+        if (payoutAmount < 500) {
+            return res.status(400).json({
+                success: false,
+                error: 'Minimum payout amount is ₹500'
+            });
+        }
+
+        if (payoutAmount > 100000) {
+            return res.status(400).json({
+                success: false,
+                error: 'Maximum payout amount is ₹1,00,000 per request'
+            });
+        }
+
+        // Validate beneficiary details
+        if (transferMode === 'bank_transfer') {
+            if (!beneficiaryDetails.accountNumber || !beneficiaryDetails.ifscCode || 
+                !beneficiaryDetails.accountHolderName) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Bank transfer requires accountNumber, ifscCode, and accountHolderName'
+                });
+            }
+
+            const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+            if (!ifscRegex.test(beneficiaryDetails.ifscCode)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid IFSC code format'
+                });
+            }
+
+            if (beneficiaryDetails.accountNumber.length < 9 || beneficiaryDetails.accountNumber.length > 18) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid account number length'
+                });
+            }
+        } else if (transferMode === 'upi') {
+            if (!beneficiaryDetails.upiId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'UPI transfer requires upiId'
+                });
+            }
+
+            const upiRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z]+$/;
+            if (!upiRegex.test(beneficiaryDetails.upiId)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid UPI ID format'
+                });
+            }
+        } else {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid transfer mode. Use bank_transfer or upi'
+            });
+        }
+
+        // ✅ CALCULATE AVAILABLE BALANCE WITH REAL PAYIN COMMISSION
+        const successfulTransactions = await Transaction.find({
+            merchantId: req.merchantId,
+            status: 'paid'
+        });
+
+        let totalRevenue = 0;
+        let totalPayinCommission = 0;
+
+        successfulTransactions.forEach(transaction => {
+            totalRevenue += transaction.amount;
+            const commissionInfo = calculatePayinCommission(transaction.amount);
+            totalPayinCommission += commissionInfo.commission;
+        });
+
+        const totalRefunded = successfulTransactions.reduce((sum, t) => sum + (t.refundAmount || 0), 0);
+
+        const completedPayouts = await Payout.find({
+            merchantId: req.merchantId,
+            status: 'completed'
+        });
+        const pendingPayouts = await Payout.find({
+            merchantId: req.merchantId,
+            status: { $in: ['requested', 'pending', 'processing'] }
+        });
+
+        const totalPaidOut = completedPayouts.reduce((sum, p) => sum + p.netAmount, 0);
+        const totalPending = pendingPayouts.reduce((sum, p) => sum + p.netAmount, 0);
+
+        const netRevenue = totalRevenue - totalRefunded - totalPayinCommission;
+        const availableBalance = netRevenue - totalPaidOut - totalPending;
+
+        // ✅ CALCULATE PAYOUT COMMISSION WITH REAL PRICING
+        const payoutCommissionInfo = calculatePayoutCommission(payoutAmount);
+        const payoutCommission = payoutCommissionInfo.commission;
+        const netAmount = payoutCommissionInfo.netAmount;
+
+        if (netAmount > availableBalance) {
+            return res.status(400).json({
+                success: false,
+                error: 'Insufficient balance for this payout request',
+                balance_info: {
+                    available_balance: availableBalance.toFixed(2),
+                    requested_gross_amount: payoutAmount.toFixed(2),
+                    payout_commission: payoutCommission.toFixed(2),
+                    requested_net_amount: netAmount.toFixed(2),
+                    shortfall: (netAmount - availableBalance).toFixed(2)
+                },
+                commission_breakdown: payoutCommissionInfo.breakdown
+            });
+        }
+
+        // Generate payout ID
+        const payoutId = `PAYOUT_REQ_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+        // Create payout request
+        const payout = new Payout({
+            payoutId,
+            merchantId: req.merchantId,
+            merchantName: req.merchantName,
+            amount: payoutAmount,
+            commission: payoutCommission,
+            commissionType: payoutCommissionInfo.commissionType,
+            commissionBreakdown: payoutCommissionInfo.breakdown,
+            netAmount,
+            currency: 'INR',
+            transferMode,
+            beneficiaryDetails,
+            status: 'requested',
+            adminNotes: notes || '',
+            requestedBy: req.user._id,
+            requestedByName: req.user.name,
+            requestedAt: new Date()
+        });
+
+        await payout.save();
+
+        console.log(`✅ Payout request created: ${payoutId} by ${req.user.name}`);
+
+        // Mask sensitive info in response
+        const maskedBeneficiary = { ...beneficiaryDetails };
+        if (maskedBeneficiary.accountNumber) {
+            const accNum = maskedBeneficiary.accountNumber;
+            maskedBeneficiary.accountNumber = 'XXXX' + accNum.slice(-4);
+        }
+
+        res.json({
+            success: true,
+            payout: {
+                payoutId,
+                amount: payoutAmount,
+                commission: payoutCommission,
+                commissionType: payoutCommissionInfo.commissionType,
+                commissionBreakdown: payoutCommissionInfo.breakdown,
+                netAmount,
+                transferMode,
+                beneficiaryDetails: maskedBeneficiary,
+                status: 'requested',
+                requestedAt: payout.requestedAt,
+                notes: notes || ''
+            },
+            balance_info: {
+                previous_available_balance: availableBalance.toFixed(2),
+                new_available_balance: (availableBalance - netAmount).toFixed(2),
+                total_pending_payouts: (totalPending + netAmount).toFixed(2)
+            },
+            message: 'Payout request submitted successfully. Awaiting SuperAdmin approval.'
+        });
+
+    } catch (error) {
+        console.error('❌ Request Payout Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to create payout request'
+        });
+    }
+};
+
+// ... (getMyPayouts and cancelPayoutRequest remain the same)
 
 // ============ GET MY PAYOUTS (Admin viewing their own payouts) ============
 exports.getMyPayouts = async (req, res) => {
@@ -108,269 +408,6 @@ exports.getMyPayouts = async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to fetch payout history'
-        });
-    }
-};
-
-// ============ REQUEST PAYOUT (Admin requesting payout) ============
-exports.requestPayout = async (req, res) => {
-    try {
-        const {
-            amount,
-            transferMode, // 'bank_transfer', 'upi'
-            beneficiaryDetails,
-            notes
-        } = req.body;
-
-        console.log(`💰 Admin ${req.user.name} requesting payout of ₹${amount}`);
-
-        // Validation
-        if (!amount || !transferMode || !beneficiaryDetails) {
-            return res.status(400).json({
-                success: false,
-                error: 'amount, transferMode, and beneficiaryDetails are required'
-            });
-        }
-
-        // Validate amount
-        const payoutAmount = parseFloat(amount);
-        if (payoutAmount < 100) {
-            return res.status(400).json({
-                success: false,
-                error: 'Minimum payout amount is ₹100'
-            });
-        }
-
-        if (payoutAmount > 100000) {
-            return res.status(400).json({
-                success: false,
-                error: 'Maximum payout amount is ₹1,00,000 per request'
-            });
-        }
-
-        // Validate beneficiary details
-        if (transferMode === 'bank_transfer') {
-            if (!beneficiaryDetails.accountNumber || !beneficiaryDetails.ifscCode || 
-                !beneficiaryDetails.accountHolderName) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Bank transfer requires accountNumber, ifscCode, and accountHolderName'
-                });
-            }
-
-            // Validate IFSC code format
-            const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
-            if (!ifscRegex.test(beneficiaryDetails.ifscCode)) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid IFSC code format'
-                });
-            }
-
-            // Validate account number (basic check)
-            if (beneficiaryDetails.accountNumber.length < 9 || beneficiaryDetails.accountNumber.length > 18) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid account number length'
-                });
-            }
-        } else if (transferMode === 'upi') {
-            if (!beneficiaryDetails.upiId) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'UPI transfer requires upiId'
-                });
-            }
-
-            // Validate UPI ID format
-            const upiRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z]+$/;
-            if (!upiRegex.test(beneficiaryDetails.upiId)) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid UPI ID format'
-                });
-            }
-        } else {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid transfer mode. Use bank_transfer or upi'
-            });
-        }
-
-        // Check available balance
-        const successfulTransactions = await Transaction.find({
-            merchantId: req.merchantId,
-            status: 'paid'
-        });
-
-        const totalRevenue = successfulTransactions.reduce((sum, t) => sum + t.amount, 0);
-        const totalRefunded = successfulTransactions.reduce((sum, t) => sum + (t.refundAmount || 0), 0);
-        const commissionRate = 2.5; // Default commission rate
-        const commission = totalRevenue * (commissionRate / 100);
-
-        // Get completed and pending payouts
-        const completedPayouts = await Payout.find({
-            merchantId: req.merchantId,
-            status: 'completed'
-        });
-        const pendingPayouts = await Payout.find({
-            merchantId: req.merchantId,
-            status: { $in: ['requested', 'pending', 'processing'] }
-        });
-
-        const totalPaidOut = completedPayouts.reduce((sum, p) => sum + p.netAmount, 0);
-        const totalPending = pendingPayouts.reduce((sum, p) => sum + p.netAmount, 0);
-
-        const netRevenue = totalRevenue - totalRefunded - commission;
-        const availableBalance = netRevenue - totalPaidOut - totalPending;
-
-        // Calculate payout details
-        const requestedCommission = (payoutAmount * commissionRate) / 100;
-        const netAmount = payoutAmount - requestedCommission;
-
-        if (netAmount > availableBalance) {
-            return res.status(400).json({
-                success: false,
-                error: 'Insufficient balance for this payout request',
-                balance_info: {
-                    available_balance: availableBalance.toFixed(2),
-                    requested_net_amount: netAmount.toFixed(2),
-                    shortfall: (netAmount - availableBalance).toFixed(2)
-                }
-            });
-        }
-
-        // Generate payout ID
-        const payoutId = `PAYOUT_REQ_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-
-        // Create payout request
-        const payout = new Payout({
-            payoutId,
-            merchantId: req.merchantId,
-            merchantName: req.merchantName,
-            amount: payoutAmount,
-            commission: requestedCommission,
-            commissionRate: commissionRate,
-            netAmount,
-            currency: 'INR',
-            transferMode,
-            beneficiaryDetails,
-            status: 'requested', // Awaiting SuperAdmin approval
-            adminNotes: notes || '',
-            requestedBy: req.user._id,
-            requestedByName: req.user.name,
-            requestedAt: new Date()
-        });
-
-        await payout.save();
-
-        console.log(`✅ Payout request created: ${payoutId} by ${req.user.name}`);
-
-        // Mask sensitive info in response
-        const maskedBeneficiary = { ...beneficiaryDetails };
-        if (maskedBeneficiary.accountNumber) {
-            const accNum = maskedBeneficiary.accountNumber;
-            maskedBeneficiary.accountNumber = 'XXXX' + accNum.slice(-4);
-        }
-
-        res.json({
-            success: true,
-            payout: {
-                payoutId,
-                amount: payoutAmount,
-                commission: requestedCommission,
-                netAmount,
-                commissionRate: `${commissionRate}%`,
-                transferMode,
-                beneficiaryDetails: maskedBeneficiary,
-                status: 'requested',
-                requestedAt: payout.requestedAt,
-                notes: notes || ''
-            },
-            balance_info: {
-                previous_available_balance: availableBalance.toFixed(2),
-                new_available_balance: (availableBalance - netAmount).toFixed(2),
-                total_pending_payouts: (totalPending + netAmount).toFixed(2)
-            },
-            message: 'Payout request submitted successfully. Awaiting SuperAdmin approval.'
-        });
-
-    } catch (error) {
-        console.error('❌ Request Payout Error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to create payout request'
-        });
-    }
-};
-
-// ============ GET MY BALANCE (Admin viewing their balance) ============
-exports.getMyBalance = async (req, res) => {
-    try {
-        console.log(`💰 Admin ${req.user.name} checking balance`);
-
-        // Get all successful transactions
-        const successfulTransactions = await Transaction.find({
-            merchantId: req.merchantId,
-            status: 'paid'
-        });
-
-        const totalRevenue = successfulTransactions.reduce((sum, t) => sum + t.amount, 0);
-        const totalRefunded = successfulTransactions.reduce((sum, t) => sum + (t.refundAmount || 0), 0);
-        
-        const commissionRate = 2.5;
-        const commission = totalRevenue * (commissionRate / 100);
-
-        // Get payouts
-        const completedPayouts = await Payout.find({
-            merchantId: req.merchantId,
-            status: 'completed'
-        });
-        const pendingPayouts = await Payout.find({
-            merchantId: req.merchantId,
-            status: { $in: ['requested', 'pending', 'processing'] }
-        });
-
-        const totalPaidOut = completedPayouts.reduce((sum, p) => sum + p.netAmount, 0);
-        const totalPending = pendingPayouts.reduce((sum, p) => sum + p.netAmount, 0);
-
-        const netRevenue = totalRevenue - totalRefunded - commission;
-        const availableBalance = netRevenue - totalPaidOut - totalPending;
-
-        res.json({
-            success: true,
-            merchant: {
-                merchantId: req.merchantId,
-                merchantName: req.merchantName,
-                merchantEmail: req.user.email
-            },
-            balance: {
-                total_revenue: totalRevenue.toFixed(2),
-                total_refunded: totalRefunded.toFixed(2),
-                commission_deducted: commission.toFixed(2),
-                commission_rate: `${commissionRate}%`,
-                net_revenue: netRevenue.toFixed(2),
-                total_paid_out: totalPaidOut.toFixed(2),
-                pending_payouts: totalPending.toFixed(2),
-                available_balance: availableBalance.toFixed(2)
-            },
-            transaction_summary: {
-                total_transactions: successfulTransactions.length,
-                total_payouts_completed: completedPayouts.length,
-                pending_payout_requests: pendingPayouts.length
-            },
-            payout_eligibility: {
-                can_request_payout: availableBalance >= 100,
-                minimum_payout_amount: 100,
-                maximum_payout_amount: Math.min(availableBalance, 100000).toFixed(2)
-            }
-        });
-
-    } catch (error) {
-        console.error('❌ Get My Balance Error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch balance'
         });
     }
 };

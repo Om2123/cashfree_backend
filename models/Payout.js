@@ -1,116 +1,55 @@
 const mongoose = require('mongoose');
 
 const PayoutSchema = new mongoose.Schema({
-    payoutId: {
-        type: String,
-        required: true,
-        unique: true,
-    },
-    merchantId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true,
-    },
-    merchantName: {
-        type: String,
-        required: true,
-    },
-    // Payout Details
-    amount: {
-        type: Number,
-        required: true,
-        min: 1,
-    },
-    commission: {
-        type: Number,
-        default: 0,
-    },
-    commissionRate: {
-        type: Number,
-        default: 2.5,
-    },
-    netAmount: {
-        type: Number,
-        required: true,
-    },
-    currency: {
-        type: String,
-        default: 'INR',
-    },
-    // Transfer Details
-    transferMode: {
-        type: String,
-        enum: ['bank_transfer', 'upi', 'wallet'],
-        required: true,
-    },
+    payoutId: { type: String, required: true, unique: true },
+    merchantId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    merchantName: String,
+    
+    amount: { type: Number, required: true },
+    commission: { type: Number, required: true },
+    commissionType: { type: String, enum: ['flat', 'percentage'] }, // ✅ NEW
+    commissionBreakdown: { type: Object }, // ✅ NEW: Stores detailed breakdown
+    netAmount: { type: Number, required: true },
+    currency: { type: String, default: 'INR' },
+    
+    transferMode: { type: String, enum: ['bank_transfer', 'upi'], required: true },
     beneficiaryDetails: {
         accountNumber: String,
         ifscCode: String,
         accountHolderName: String,
         bankName: String,
-        upiId: String,
-        walletPhone: String,
+        branchName: String,
+        upiId: String
     },
-    // Status
+    
     status: {
         type: String,
         enum: ['requested', 'pending', 'processing', 'completed', 'failed', 'cancelled'],
-        default: 'pending',
+        default: 'requested'
     },
-    // Cashfree Transfer Details
-    cashfreeTransferId: String,
-    cashfreeReferenceId: String,
-    cashfreeUtr: String,
-    // Transaction References
-    relatedTransactions: [{
-        type: String, // Transaction IDs
-    }],
-    // Processing Details
-    processedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-    },
-    processedByName: String,
-    processedAt: Date,
-    // Approval/Request metadata
-    requestedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-    },
+    
+    requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     requestedByName: String,
     requestedAt: Date,
-    approvedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-    },
+    
+    approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     approvedByName: String,
     approvedAt: Date,
-    rejectedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-    },
+    
+    processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    processedByName: String,
+    processedAt: Date,
+    
+    rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     rejectedByName: String,
     rejectedAt: Date,
     rejectionReason: String,
-    failureReason: String,
-    notes: String,
-    createdAt: {
-        type: Date,
-        default: Date.now,
-    },
-    updatedAt: {
-        type: Date,
-        default: Date.now,
-    },
+    
+    adminNotes: String,
+    utr: String,
+    
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
 });
-
-PayoutSchema.pre('save', function(next) {
-    this.updatedAt = Date.now();
-    next();
-});
-
-PayoutSchema.index({ merchantId: 1, createdAt: -1 });
-PayoutSchema.index({ status: 1 });
-PayoutSchema.index({ payoutId: 1 });
 
 module.exports = mongoose.model('Payout', PayoutSchema);
