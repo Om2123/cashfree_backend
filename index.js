@@ -2,6 +2,7 @@ const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const { settlementJob } = require('./jobs/settlementJob');
 
 dotenv.config();
 connectDB();
@@ -18,7 +19,7 @@ app.use(express.json({
         req.rawBody = buf.toString();
     }
 }));
-
+settlementJob.start();
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', require('./routes/apiRoutes'));

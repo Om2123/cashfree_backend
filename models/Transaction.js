@@ -84,6 +84,25 @@ const TransactionSchema = new mongoose.Schema({
     },
     refundReason: String,
     refundedAt: Date,
+    settlementStatus: {
+        type: String,
+        enum: ['unsettled', 'settled', 'on_hold'],
+        default: 'unsettled'
+    },
+    settlementDate: {
+        type: Date,
+        default: null
+    },
+    expectedSettlementDate: {
+        type: Date,
+        default: function () {
+            // T+1 settlement: Next day at 3 PM
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(15, 0, 0, 0); // 3 PM
+            return tomorrow;
+        }
+    },
     createdAt: {
         type: Date,
         default: Date.now,
