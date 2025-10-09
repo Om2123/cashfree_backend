@@ -16,27 +16,32 @@ exports.getMyBalance = async (req, res) => {
             status: 'paid'
         });
 
-        // Calculate total revenue and commission with real pricing
-        let totalRevenue = 0;
-        let totalCommission = 0;
-        let transactionCommissionDetails = [];
+        // ✅ SEPARATE SETTLED AND UNSETTLED
+        const settledTransactions = successfulTransactions.filter(t => t.settlementStatus === 'settled');
+        const unsettledTransactions = successfulTransactions.filter(t => t.settlementStatus === 'unsettled');
 
-        successfulTransactions.forEach(transaction => {
-            const amount = transaction.amount;
-            totalRevenue += amount;
+        // Calculate settled revenue and commission
+        let settledRevenue = 0;
+        let settledCommission = 0;
 
-            // Calculate payin commission for each transaction
-            const commissionInfo = calculatePayinCommission(amount);
-            totalCommission += commissionInfo.commission;
-
-            transactionCommissionDetails.push({
-                transactionId: transaction.transactionId,
-                amount: amount,
-                commission: commissionInfo.commission,
-                isMinimumCharge: commissionInfo.isMinimumCharge
-            });
+        settledTransactions.forEach(transaction => {
+            settledRevenue += transaction.amount;
+            const commissionInfo = calculatePayinCommission(transaction.amount);
+            settledCommission += commissionInfo.commission;
         });
 
+        // Calculate unsettled revenue and commission
+        let unsettledRevenue = 0;
+        let unsettledCommission = 0;
+
+        unsettledTransactions.forEach(transaction => {
+            unsettledRevenue += transaction.amount;
+            const commissionInfo = calculatePayinCommission(transaction.amount);
+            unsettledCommission += commissionInfo.commission;
+        });
+
+        const totalRevenue = settledRevenue + unsettledRevenue;
+        const totalCommission = settledCommission + unsettledCommission;
         const totalRefunded = successfulTransactions.reduce((sum, t) => sum + (t.refundAmount || 0), 0);
 
         // Get payouts
@@ -52,8 +57,12 @@ exports.getMyBalance = async (req, res) => {
         const totalPaidOut = completedPayouts.reduce((sum, p) => sum + p.netAmount, 0);
         const totalPending = pendingPayouts.reduce((sum, p) => sum + p.netAmount, 0);
 
-        const netRevenue = totalRevenue - totalRefunded - totalCommission;
-        const availableBalance = netRevenue - totalPaidOut - totalPending;
+        // ✅ CALCULATE SETTLED BALANCE (available for payout)
+        const settledNetRevenue = settledRevenue - totalRefunded - settledCommission;
+        const availableBalance = settledNetRevenue - totalPaidOut - totalPending;
+
+        // ✅ CALCULATE UNSETTLED BALANCE (locked until settlement)
+        const unsettledNetRevenue = unsettledRevenue - unsettledCommission;
 
         res.json({
             success: true,
@@ -63,19 +72,37 @@ exports.getMyBalance = async (req, res) => {
                 merchantEmail: req.user.email
             },
             balance: {
+                // ✅ SETTLED BALANCE (can withdraw)
+                settled_revenue: settledRevenue.toFixed(2),
+                settled_commission: settledCommission.toFixed(2),
+                settled_net_revenue: settledNetRevenue.toFixed(2),
+                available_balance: availableBalance.toFixed(2),
+                
+                // ✅ UNSETTLED BALANCE (locked)
+                unsettled_revenue: unsettledRevenue.toFixed(2),
+                unsettled_commission: unsettledCommission.toFixed(2),
+                unsettled_net_revenue: unsettledNetRevenue.toFixed(2),
+                
+                // TOTALS
                 total_revenue: totalRevenue.toFixed(2),
                 total_refunded: totalRefunded.toFixed(2),
-                commission_deducted: totalCommission.toFixed(2),
+                total_commission: totalCommission.toFixed(2),
+                net_revenue: (settledNetRevenue + unsettledNetRevenue).toFixed(2),
+                total_paid_out: totalPaidOut.toFixed(2),
+                pending_payouts: totalPending.toFixed(2),
+                
                 commission_structure: {
                     payin: '3.8% + 18% GST (Effective: 4.484%)',
                     minimum_charge: '₹18 + 18% GST (₹21.24)',
                     payout_500_to_1000: '₹30 + 18% GST (₹35.40)',
                     payout_above_1000: '1.50% + 18% GST (1.77%)'
-                },
-                net_revenue: netRevenue.toFixed(2),
-                total_paid_out: totalPaidOut.toFixed(2),
-                pending_payouts: totalPending.toFixed(2),
-                available_balance: availableBalance.toFixed(2)
+                }
+            },
+            settlement_info: {
+                settled_transactions: settledTransactions.length,
+                unsettled_transactions: unsettledTransactions.length,
+                next_settlement_time: '3:00 PM (T+1)',
+                settlement_schedule: 'Daily at 3 PM for transactions from previous day'
             },
             transaction_summary: {
                 total_transactions: successfulTransactions.length,
@@ -98,6 +125,7 @@ exports.getMyBalance = async (req, res) => {
         });
     }
 };
+
 
 // ============ REQUEST PAYOUT (Updated with real payout commission) ============
 exports.requestPayout = async (req, res) => {

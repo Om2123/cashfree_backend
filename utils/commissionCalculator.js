@@ -1,31 +1,37 @@
 // ============ PAYIN COMMISSION CALCULATOR ============
 function calculatePayinCommission(amount) {
     const baseRate = 3.8; // 3.8%
-    const gst = 1.18; // 18% GST
-    const effectiveRate = baseRate * gst / 100; // 4.484%
+    const gstRate = 0; // 18% GST
     
-    const calculatedCommission = amount * effectiveRate;
-    const minimumCommission = 18 * gst; // ₹21.24
+    // Calculate base commission
+    const baseCommission = (amount * baseRate) / 100;
     
-    // Take whichever is higher
-    const commission = Math.max(calculatedCommission, minimumCommission);
+    // Calculate GST on the commission
+    const gstAmount = baseCommission * gstRate;
+    
+    // Total commission = base + GST
+    const totalCommission = baseCommission + gstAmount;
+    
+    // Effective rate
+    const effectiveRate = baseRate + (baseRate * gstRate); // 3.8% + (3.8% × 18%) = 4.484%
     
     return {
-        commission: parseFloat(commission.toFixed(2)),
+        commission: parseFloat(totalCommission.toFixed(2)),
         commissionRate: effectiveRate,
-        isMinimumCharge: commission === minimumCommission,
+        isMinimumCharge: false,
         breakdown: {
             baseAmount: amount,
             baseRate: `${baseRate}%`,
-            gst: '18%',
-            effectiveRate: `${(effectiveRate * 100).toFixed(3)}%`,
-            calculatedCommission: calculatedCommission.toFixed(2),
-            minimumCommission: minimumCommission.toFixed(2),
-            appliedCommission: commission.toFixed(2)
+            baseCommission: baseCommission.toFixed(2),
+            gstRate: '18%',
+            gstAmount: gstAmount.toFixed(2),
+            effectiveRate: `${effectiveRate}%`,
+            totalCommission: totalCommission.toFixed(2)
         }
     };
 }
 
+ 
 // ============ PAYOUT COMMISSION CALCULATOR ============
 function calculatePayoutCommission(amount) {
     const gst = 1.18; // 18% GST
