@@ -1,18 +1,284 @@
-const crypto = require('crypto');
-const Transaction = require('../models/Transaction');
 const Payout = require('../models/Payout');
 const User = require('../models/User');
-const axios = require('axios');
+const Transaction = require('../models/Transaction');
 
-// Cashfree Payout API Configuration
-const cashfreePayouts = axios.create({
-    baseURL: process.env.CASHFREE_PAYOUT_URL || 'https://payout-api.cashfree.com',
-    headers: {
-        'X-Client-Id': process.env.CASHFREE_APP_ID,
-        'X-Client-Secret': process.env.CASHFREE_SECRET_KEY,
-        'Content-Type': 'application/json'
+// ============ GET ALL PAYOUTS (SuperAdmin) ============
+exports.getAllPayouts = async (req, res) => {
+    try {
+        const {
+            page = 1,
+            limit = 20,
+            status,
+            merchantId,
+            startDate,
+            endDate,
+            sortBy = 'createdAt',
+            sortOrder = 'desc'
+        } = req.query;
+
+        console.log(`📋 SuperAdmin ${req.user.name} fetching all payouts - Page ${page}`);
+
+        // Build query
+        let query = {};
+
+        // Filter by status
+        if (status) {
+            if (status.includes(',')) {
+                query.status = { $in: status.split(',') };
+            } else {
+                query.status = status;
+            }
+        }
+
+        // Filter by merchant
+        if (merchantId) {
+            query.merchantId = merchantId;
+        }
+
+        // Date range filter
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) query.createdAt.$gte = new Date(startDate);
+            if (endDate) query.createdAt.$lte = new Date(endDate);
+        }
+
+        // Get total count
+        const totalCount = await Payout.countDocuments(query);
+
+        // Build sort
+        const sort = {};
+        sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+        // Get payouts
+        const payouts = await Payout.find(query)
+            .sort(sort)
+            .limit(parseInt(limit))
+            .skip((parseInt(page) - 1) * parseInt(limit))
+            .populate('merchantId', 'name email')
+            .populate('requestedBy', 'name email')
+            .populate('approvedBy', 'name email')
+            .populate('rejectedBy', 'name email')
+            .lean();
+
+        // Calculate summary
+        const allPayouts = await Payout.find({});
+        const totalRequested = allPayouts.reduce((sum, p) => sum + p.amount, 0);
+        const totalCompleted = allPayouts.filter(p => p.status === 'completed').reduce((sum, p) => sum + p.netAmount, 0);
+        const totalPending = allPayouts.filter(p => ['requested', 'pending', 'processing'].includes(p.status)).reduce((sum, p) => sum + p.netAmount, 0);
+
+        res.json({
+            success: true,
+            payouts,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount / parseInt(limit)),
+                totalCount,
+                limit: parseInt(limit),
+                hasNextPage: parseInt(page) < Math.ceil(totalCount / parseInt(limit)),
+                hasPrevPage: parseInt(page) > 1
+            },
+            summary: {
+                total_payout_requests: allPayouts.length,
+                requested_payouts: allPayouts.filter(p => p.status === 'requested').length,
+                pending_payouts: allPayouts.filter(p => ['pending', 'processing'].includes(p.status)).length,
+                completed_payouts: allPayouts.filter(p => p.status === 'completed').length,
+                failed_payouts: allPayouts.filter(p => p.status === 'failed').length,
+                rejected_payouts: allPayouts.filter(p => p.status === 'rejected').length,
+                cancelled_payouts: allPayouts.filter(p => p.status === 'cancelled').length,
+                total_amount_requested: totalRequested.toFixed(2),
+                total_completed: totalCompleted.toFixed(2),
+                total_pending: totalPending.toFixed(2)
+            }
+        });
+
+        console.log(`✅ Returned ${payouts.length} payouts to SuperAdmin`);
+
+    } catch (error) {
+        console.error('❌ Get All Payouts Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch payouts'
+        });
     }
-});
+};
+
+// ============ APPROVE PAYOUT ============
+exports.approvePayout = async (req, res) => {
+    try {
+        const { payoutId } = req.params;
+        const { notes } = req.body;
+
+        console.log(`✅ SuperAdmin ${req.user.name} approving payout: ${payoutId}`);
+
+        const payout = await Payout.findOne({ payoutId });
+
+        if (!payout) {
+            return res.status(404).json({
+                success: false,
+                error: 'Payout request not found'
+            });
+        }
+
+        if (payout.status !== 'requested') {
+            return res.status(400).json({
+                success: false,
+                error: `Cannot approve payout with status: ${payout.status}`
+            });
+        }
+
+        // Update payout
+        payout.status = 'pending';
+        payout.approvedBy = req.user._id;
+        payout.approvedByName = req.user.name;
+        payout.approvedAt = new Date();
+        payout.superAdminNotes = notes || '';
+
+        await payout.save();
+
+        res.json({
+            success: true,
+            message: 'Payout approved successfully. Ready for processing.',
+            payout: {
+                payoutId: payout.payoutId,
+                status: payout.status,
+                approvedBy: payout.approvedByName,
+                approvedAt: payout.approvedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Approve Payout Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to approve payout'
+        });
+    }
+};
+
+// ============ REJECT PAYOUT ============
+exports.rejectPayout = async (req, res) => {
+    try {
+        const { payoutId } = req.params;
+        const { reason } = req.body;
+
+        if (!reason) {
+            return res.status(400).json({
+                success: false,
+                error: 'Rejection reason is required'
+            });
+        }
+
+        console.log(`❌ SuperAdmin ${req.user.name} rejecting payout: ${payoutId}`);
+
+        const payout = await Payout.findOne({ payoutId });
+
+        if (!payout) {
+            return res.status(404).json({
+                success: false,
+                error: 'Payout request not found'
+            });
+        }
+
+        if (payout.status === 'completed') {
+            return res.status(400).json({
+                success: false,
+                error: 'Cannot reject a completed payout'
+            });
+        }
+
+        // Update payout
+        payout.status = 'rejected';
+        payout.rejectedBy = req.user._id;
+        payout.rejectedByName = req.user.name;
+        payout.rejectedAt = new Date();
+        payout.rejectionReason = reason;
+
+        await payout.save();
+
+        res.json({
+            success: true,
+            message: 'Payout rejected successfully',
+            payout: {
+                payoutId: payout.payoutId,
+                status: payout.status,
+                rejectedBy: payout.rejectedByName,
+                rejectedAt: payout.rejectedAt,
+                reason: payout.rejectionReason
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Reject Payout Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to reject payout'
+        });
+    }
+};
+
+// ============ PROCESS PAYOUT (Mark as completed with UTR) ============
+exports.processPayout = async (req, res) => {
+    try {
+        const { payoutId } = req.params;
+        const { utr, notes } = req.body;
+
+        if (!utr) {
+            return res.status(400).json({
+                success: false,
+                error: 'UTR/Transaction reference is required'
+            });
+        }
+
+        console.log(`💰 SuperAdmin ${req.user.name} processing payout: ${payoutId} with UTR: ${utr}`);
+
+        const payout = await Payout.findOne({ payoutId });
+
+        if (!payout) {
+            return res.status(404).json({
+                success: false,
+                error: 'Payout request not found'
+            });
+        }
+
+        if (payout.status !== 'pending' && payout.status !== 'processing') {
+            return res.status(400).json({
+                success: false,
+                error: `Cannot process payout with status: ${payout.status}`
+            });
+        }
+
+        // Update payout as completed
+        payout.status = 'completed';
+        payout.processedBy = req.user._id;
+        payout.processedByName = req.user.name;
+        payout.processedAt = new Date();
+        payout.completedAt = new Date();
+        payout.utr = utr;
+        payout.superAdminNotes = notes || payout.superAdminNotes;
+
+        await payout.save();
+
+        res.json({
+            success: true,
+            message: 'Payout processed and completed successfully',
+            payout: {
+                payoutId: payout.payoutId,
+                status: payout.status,
+                netAmount: payout.netAmount,
+                utr: payout.utr,
+                processedBy: payout.processedByName,
+                completedAt: payout.completedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Process Payout Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to process payout'
+        });
+    }
+};
 
 // ============ GET ALL TRANSACTIONS (All Merchants) ============
 exports.getAllTransactions = async (req, res) => {
@@ -176,396 +442,5 @@ exports.getAllTransactions = async (req, res) => {
     }
 };
 
-// ============ CREATE PAYOUT ============
-exports.createPayout = async (req, res) => {
-    try {
-        const {
-            merchantId,
-            amount,
-            transferMode, // 'bank_transfer', 'upi', 'wallet'
-            beneficiaryDetails,
-            notes,
-            commissionRate = 2.5
-        } = req.body;
 
-        console.log(`💰 SuperAdmin initiating payout for merchant: ${merchantId}`);
-
-        // Validation
-        if (!merchantId || !amount || !transferMode || !beneficiaryDetails) {
-            return res.status(400).json({
-                success: false,
-                error: 'merchantId, amount, transferMode, and beneficiaryDetails are required'
-            });
-        }
-
-        // Verify merchant exists
-        const merchant = await User.findById(merchantId);
-        if (!merchant) {
-            return res.status(404).json({
-                success: false,
-                error: 'Merchant not found'
-            });
-        }
-
-        // Validate amount
-        const payoutAmount = parseFloat(amount);
-        if (payoutAmount < 1 || payoutAmount > 1000000) {
-            return res.status(400).json({
-                success: false,
-                error: 'Amount must be between ₹1 and ₹10,00,000'
-            });
-        }
-
-        // Calculate commission
-        const commission = (payoutAmount * parseFloat(commissionRate)) / 100;
-        const netAmount = payoutAmount - commission;
-
-        if (netAmount < 1) {
-            return res.status(400).json({
-                success: false,
-                error: 'Net amount after commission must be at least ₹1'
-            });
-        }
-
-        // Validate beneficiary details based on transfer mode
-        if (transferMode === 'bank_transfer') {
-            if (!beneficiaryDetails.accountNumber || !beneficiaryDetails.ifscCode || 
-                !beneficiaryDetails.accountHolderName) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Bank transfer requires accountNumber, ifscCode, and accountHolderName'
-                });
-            }
-        } else if (transferMode === 'upi') {
-            if (!beneficiaryDetails.upiId) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'UPI transfer requires upiId'
-                });
-            }
-        }
-
-        // Generate payout ID
-        const payoutId = `PAYOUT_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-
-        // Create payout record
-        const payout = new Payout({
-            payoutId,
-            merchantId,
-            merchantName: merchant.name,
-            amount: payoutAmount,
-            commission,
-            commissionRate: parseFloat(commissionRate),
-            netAmount,
-            currency: 'INR',
-            transferMode,
-            beneficiaryDetails,
-            status: 'pending',
-            notes: notes || '',
-            processedBy: req.user._id,
-            processedByName: req.user.name
-        });
-
-        await payout.save();
-
-        console.log(`💾 Payout record created: ${payoutId}`);
-
-        // Now process the actual transfer via Cashfree Payouts API
-        try {
-            let transferData;
-            const transferId = `TRANSFER_${Date.now()}`;
-
-            if (transferMode === 'bank_transfer') {
-                transferData = {
-                    beneId: `BENE_${merchantId}_${Date.now()}`,
-                    amount: netAmount.toString(),
-                    transferId: transferId,
-                    transferMode: 'banktransfer',
-                    remarks: `Payout to ${merchant.name} - CashCavash Platform`,
-                    beneDetails: {
-                        name: beneficiaryDetails.accountHolderName,
-                        bankAccount: beneficiaryDetails.accountNumber,
-                        ifsc: beneficiaryDetails.ifscCode,
-                        email: merchant.email,
-                        phone: merchant.phone || '9999999999'
-                    }
-                };
-            } else if (transferMode === 'upi') {
-                transferData = {
-                    beneId: `BENE_${merchantId}_${Date.now()}`,
-                    amount: netAmount.toString(),
-                    transferId: transferId,
-                    transferMode: 'upi',
-                    remarks: `Payout to ${merchant.name} - CashCavash Platform`,
-                    beneDetails: {
-                        name: merchant.name,
-                        vpa: beneficiaryDetails.upiId,
-                        email: merchant.email,
-                        phone: merchant.phone || '9999999999'
-                    }
-                };
-            }
-
-            console.log(`📤 Initiating Cashfree transfer: ${transferId}`);
-
-            // Call Cashfree Payouts API
-            const cashfreeResponse = await cashfreePayouts.post('/payout/v1/requestTransfer', transferData);
-
-            // Update payout with Cashfree details
-            payout.status = 'processing';
-            payout.cashfreeTransferId = cashfreeResponse.data.data?.transferId || transferId;
-            payout.cashfreeReferenceId = cashfreeResponse.data.data?.referenceId || null;
-            payout.processedAt = new Date();
-            
-            await payout.save();
-
-            console.log(`✅ Payout initiated successfully: ${payoutId}`);
-
-            res.json({
-                success: true,
-                payout: {
-                    payoutId,
-                    merchantId,
-                    merchantName: merchant.name,
-                    amount: payoutAmount,
-                    commission,
-                    netAmount,
-                    transferMode,
-                    status: payout.status,
-                    cashfreeTransferId: payout.cashfreeTransferId,
-                    createdAt: payout.createdAt
-                },
-                breakdown: {
-                    gross_amount: payoutAmount,
-                    commission_deducted: commission,
-                    commission_rate: `${commissionRate}%`,
-                    net_amount_transferred: netAmount
-                },
-                message: 'Payout initiated successfully. Processing transfer...'
-            });
-
-        } catch (cashfreeError) {
-            console.error('❌ Cashfree Payout Error:', cashfreeError.response?.data || cashfreeError.message);
-
-            // Update payout status to failed
-            payout.status = 'failed';
-            payout.failureReason = cashfreeError.response?.data?.message || cashfreeError.message;
-            await payout.save();
-
-            return res.status(500).json({
-                success: false,
-                error: 'Payout initiation failed',
-                details: cashfreeError.response?.data || cashfreeError.message,
-                payout: {
-                    payoutId,
-                    status: 'failed'
-                }
-            });
-        }
-
-    } catch (error) {
-        console.error('❌ Create Payout Error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to create payout'
-        });
-    }
-};
-
-// ============ GET ALL PAYOUTS ============
-exports.getAllPayouts = async (req, res) => {
-    try {
-        const {
-            page = 1,
-            limit = 20,
-            merchantId,
-            status,
-            startDate,
-            endDate,
-            sortBy = 'createdAt',
-            sortOrder = 'desc'
-        } = req.query;
-
-        console.log(`📋 SuperAdmin fetching payouts - Page ${page}`);
-
-        // Build query
-        let query = {};
-
-        if (merchantId) {
-            query.merchantId = merchantId;
-        }
-
-        if (status) {
-            if (status.includes(',')) {
-                query.status = { $in: status.split(',') };
-            } else {
-                query.status = status;
-            }
-        }
-
-        if (startDate || endDate) {
-            query.createdAt = {};
-            if (startDate) query.createdAt.$gte = new Date(startDate);
-            if (endDate) query.createdAt.$lte = new Date(endDate);
-        }
-
-        // Get total count
-        const totalCount = await Payout.countDocuments(query);
-
-        // Build sort
-        const sort = {};
-        sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
-
-        // Get payouts
-        const payouts = await Payout.find(query)
-            .sort(sort)
-            .limit(parseInt(limit))
-            .skip((parseInt(page) - 1) * parseInt(limit))
-            .populate('merchantId', 'name email')
-            .populate('processedBy', 'name email')
-            .lean();
-
-        // Calculate summary
-        const allPayouts = await Payout.find({});
-        const totalPaid = allPayouts.filter(p => p.status === 'completed').reduce((sum, p) => sum + p.netAmount, 0);
-        const totalCommission = allPayouts.reduce((sum, p) => sum + p.commission, 0);
-        const totalPending = allPayouts.filter(p => p.status === 'pending' || p.status === 'processing').reduce((sum, p) => sum + p.netAmount, 0);
-
-        res.json({
-            success: true,
-            payouts,
-            pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(totalCount / parseInt(limit)),
-                totalCount,
-                limit: parseInt(limit)
-            },
-            summary: {
-                total_payouts: allPayouts.length,
-                completed_payouts: allPayouts.filter(p => p.status === 'completed').length,
-                pending_payouts: allPayouts.filter(p => p.status === 'pending' || p.status === 'processing').length,
-                failed_payouts: allPayouts.filter(p => p.status === 'failed').length,
-                total_paid_out: totalPaid.toFixed(2),
-                total_commission_earned: totalCommission.toFixed(2),
-                total_pending: totalPending.toFixed(2)
-            }
-        });
-
-    } catch (error) {
-        console.error('❌ Get Payouts Error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch payouts'
-        });
-    }
-};
-
-// ============ APPROVE PAYOUT REQUEST ============
-exports.approvePayoutRequest = async (req, res) => {
-    try {
-        const { payoutId } = req.params;
-        const { notes } = req.body;
-
-        // Find payout in requested state
-        const payout = await Payout.findOne({ payoutId });
-        if (!payout) {
-            return res.status(404).json({ success: false, error: 'Payout not found' });
-        }
-        if (payout.status !== 'requested') {
-            return res.status(400).json({ success: false, error: `Only requested payouts can be approved. Current status: ${payout.status}` });
-        }
-
-        // Approve metadata
-        payout.approvedBy = req.user._id;
-        payout.approvedByName = req.user.name;
-        payout.approvedAt = new Date();
-        payout.notes = notes || payout.notes;
-        payout.status = 'pending';
-        await payout.save();
-
-        return res.json({
-            success: true,
-            message: 'Payout approved and moved to pending for processing',
-            payout: {
-                payoutId: payout.payoutId,
-                status: payout.status,
-                approvedAt: payout.approvedAt,
-                approvedBy: payout.approvedByName
-            }
-        });
-    } catch (error) {
-        console.error('❌ Approve Payout Error:', error);
-        res.status(500).json({ success: false, error: 'Failed to approve payout' });
-    }
-};
-
-// ============ GET MERCHANT BALANCE ============
-exports.getMerchantBalance = async (req, res) => {
-    try {
-        const { merchantId } = req.params;
-
-        // Get all successful transactions for this merchant
-        const successfulTransactions = await Transaction.find({
-            merchantId,
-            status: 'paid'
-        });
-
-        // Calculate total revenue
-        const totalRevenue = successfulTransactions.reduce((sum, t) => sum + t.amount, 0);
-        const totalRefunded = successfulTransactions.reduce((sum, t) => sum + (t.refundAmount || 0), 0);
-
-        // Calculate commission (2.5%)
-        const commission = totalRevenue * 0.025;
-
-        // Get total payouts already made
-        const completedPayouts = await Payout.find({
-            merchantId,
-            status: 'completed'
-        });
-        const totalPaidOut = completedPayouts.reduce((sum, p) => sum + p.netAmount, 0);
-
-        // Get pending payouts
-        const pendingPayouts = await Payout.find({
-            merchantId,
-            status: { $in: ['pending', 'processing'] }
-        });
-        const totalPending = pendingPayouts.reduce((sum, p) => sum + p.netAmount, 0);
-
-        // Calculate available balance
-        const netRevenue = totalRevenue - totalRefunded - commission;
-        const availableBalance = netRevenue - totalPaidOut - totalPending;
-
-        // Get merchant details
-        const merchant = await User.findById(merchantId).select('name email');
-
-        res.json({
-            success: true,
-            merchant: {
-                merchantId,
-                merchantName: merchant?.name,
-                merchantEmail: merchant?.email
-            },
-            balance: {
-                total_revenue: totalRevenue.toFixed(2),
-                total_refunded: totalRefunded.toFixed(2),
-                commission_deducted: commission.toFixed(2),
-                net_revenue: netRevenue.toFixed(2),
-                total_paid_out: totalPaidOut.toFixed(2),
-                pending_payouts: totalPending.toFixed(2),
-                available_balance: availableBalance.toFixed(2)
-            },
-            transaction_summary: {
-                total_transactions: successfulTransactions.length,
-                total_payouts: completedPayouts.length,
-                pending_payout_requests: pendingPayouts.length
-            }
-        });
-
-    } catch (error) {
-        console.error('❌ Get Merchant Balance Error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch merchant balance'
-        });
-    }
-};
+ 

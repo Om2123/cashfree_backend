@@ -16,21 +16,32 @@ const TransactionSchema = new mongoose.Schema({
         ref: 'User',
         required: true,
     },
-    // Add these fields to your existing Transaction model
+    
+    // Razorpay Fields
     razorpayPaymentLinkId: String,
     razorpayPaymentId: String,
     razorpayOrderId: String,
     razorpayReferenceId: String,
+    
+    // Cashfree Fields
+    cashfreeOrderToken: String,
+    cashfreePaymentId: String,
+    cashfreeOrderId: String,
+    
+    // Payment Gateway
     paymentGateway: String, // 'razorpay' or 'cashfree'
-    // Add to Transaction model
+    
+    // URLs
     callbackUrl: String,
     successUrl: String,
     failureUrl: String,
 
+    // Merchant
     merchantName: {
         type: String,
         required: true,
     },
+    
     // Customer Details
     customerId: {
         type: String,
@@ -48,6 +59,7 @@ const TransactionSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
+    
     // Payment Details
     amount: {
         type: Number,
@@ -62,28 +74,30 @@ const TransactionSchema = new mongoose.Schema({
         type: String,
         default: '',
     },
+    
     // Status
     status: {
         type: String,
-        enum: ['created', 'pending', 'paid', 'failed', 'cancelled', 'refunded', 'partial_refund'],
+        enum: ['created', 'pending', 'paid', 'failed', 'cancelled', 'refunded', 'partial_refund', 'expired'],
         default: 'created',
     },
-    // Cashfree Data
-    cashfreeOrderToken: String,
-    cashfreePaymentId: String,
-    cashfreeOrderId: String,
-    paymentMethod: String,
-    // Timestamps
-    paidAt: Date,
-    failureReason: String,
-    webhookData: Object,
-    // Refund Data
-    refundAmount: {
-        type: Number,
-        default: 0,
+    
+    // Payment Method
+    paymentMethod: String, // 'upi', 'card', 'netbanking', 'wallet'
+    
+    // ✅ ACQUIRER DATA - Bank/Payment Details
+    acquirerData: {
+        utr: String, // UTR for UPI/NEFT/RTGS
+        rrn: String, // Retrieval Reference Number (UPI)
+        bank_transaction_id: String, // Bank's transaction ID
+        auth_code: String, // Card authorization code
+        card_last4: String, // Last 4 digits of card
+        card_network: String, // Visa, Mastercard, etc.
+        bank_name: String, // Bank name
+        vpa: String // UPI VPA (e.g., user@paytm)
     },
-    refundReason: String,
-    refundedAt: Date,
+    
+    // Settlement Info
     settlementStatus: {
         type: String,
         enum: ['unsettled', 'settled', 'on_hold'],
@@ -96,13 +110,32 @@ const TransactionSchema = new mongoose.Schema({
     expectedSettlementDate: {
         type: Date,
         default: function () {
-            // T+1 settlement: Next day at 3 PM
             const tomorrow = new Date();
             tomorrow.setDate(tomorrow.getDate() + 1);
             tomorrow.setHours(15, 0, 0, 0); // 3 PM
             return tomorrow;
         }
     },
+    
+    // Timestamps
+    paidAt: Date,
+    
+    // Failure Data
+    failureReason: String,
+    failureCode: String,
+    
+    // Webhook Data
+    webhookData: Object,
+    
+    // Refund Data
+    refundAmount: {
+        type: Number,
+        default: 0,
+    },
+    refundReason: String,
+    refundedAt: Date,
+    refundId: String,
+    
     createdAt: {
         type: Date,
         default: Date.now,
@@ -118,9 +151,14 @@ TransactionSchema.pre('save', function (next) {
     next();
 });
 
+// Indexes for fast queries
 TransactionSchema.index({ merchantId: 1, createdAt: -1 });
 TransactionSchema.index({ orderId: 1 });
 TransactionSchema.index({ transactionId: 1 });
 TransactionSchema.index({ status: 1 });
+TransactionSchema.index({ 'acquirerData.utr': 1 }); // ✅ Index for UTR search
+TransactionSchema.index({ razorpayPaymentId: 1 });
+TransactionSchema.index({ customerEmail: 1 });
+TransactionSchema.index({ customerPhone: 1 });
 
 module.exports = mongoose.model('Transaction', TransactionSchema);

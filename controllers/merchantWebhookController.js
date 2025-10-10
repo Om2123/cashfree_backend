@@ -131,7 +131,7 @@ exports.testMerchantWebhook = async (req, res) => {
 
         console.log('📤 Sending test webhook to:', merchant.webhookUrl);
 
-        const result = await sendMerchantWebhook(merchant, testPayload);
+        const result = await this.sendMerchantWebhook(merchant, testPayload);
 
         res.json({
             success: result.success,
