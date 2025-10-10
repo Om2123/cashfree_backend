@@ -11,9 +11,10 @@ const {
 
 const {
     getAllTransactions,
-    createPayout,
     getAllPayouts,
-    approvePayoutRequest,
+    approvePayout,
+    rejectPayout,
+    processPayout
 } = require('../controllers/superAdminController.js');
 
 // ✅ MAKE SURE ALL THESE FUNCTIONS EXIST IN THE CONTROLLER
@@ -43,16 +44,18 @@ router.delete('/merchant/webhook', auth, deleteMerchantWebhook);
 
 
 
+// ============ SUPERADMIN ROUTES (JWT Auth - SuperAdmin Dashboard) ============
+router.get('/admin/payouts/all', superAdminAuth, getAllPayouts);
+router.post('/admin/payout/:payoutId/approve', superAdminAuth, approvePayout);
+router.post('/admin/payout/:payoutId/reject', superAdminAuth, rejectPayout);
+router.post('/admin/payout/:payoutId/process', superAdminAuth, processPayout);
+router.get('/admin/transactions', superAdminAuth, getAllTransactions);
+
 // ============ ADMIN APIs (JWT Auth - Merchant Dashboard) ============
 router.get('/merchant/payouts', auth, getMyPayouts);
 router.post('/merchant/payout/request', auth, requestPayout);
 router.get('/merchant/balance', auth, getMyBalance);
 router.post('/merchant/payout/:payoutId/cancel', auth, cancelPayoutRequest);
 
-// ============ SUPERADMIN APIs (JWT Auth - Admin Dashboard) ============
-router.get('/admin/transactions', superAdminAuth, getAllTransactions);
-router.post('/admin/payout', superAdminAuth, createPayout);
-router.get('/admin/payouts', superAdminAuth, getAllPayouts);
-router.post('/admin/payout/:payoutId/approve', superAdminAuth, approvePayoutRequest);
 
 module.exports = router;

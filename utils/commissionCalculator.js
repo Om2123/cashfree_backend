@@ -23,7 +23,7 @@ function calculatePayinCommission(amount) {
             baseAmount: amount,
             baseRate: `${baseRate}%`,
             baseCommission: baseCommission.toFixed(2),
-            gstRate: '18%',
+            gstRate: '0%',
             gstAmount: gstAmount.toFixed(2),
             effectiveRate: `${effectiveRate}%`,
             totalCommission: totalCommission.toFixed(2)
@@ -34,7 +34,7 @@ function calculatePayinCommission(amount) {
  
 // ============ PAYOUT COMMISSION CALCULATOR ============
 function calculatePayoutCommission(amount) {
-    const gst = 1.18; // 18% GST
+    const gst = 0; // 18% GST
     let commission;
     let commissionType;
     let breakdown;
@@ -58,7 +58,7 @@ function calculatePayoutCommission(amount) {
         breakdown = {
             baseAmount: amount,
             baseRate: `${baseRate}%`,
-            gst: '18%',
+            gst: '0%',
             effectiveRate: `${(effectiveRate * 100).toFixed(2)}%`,
             totalCommission: commission.toFixed(2)
         };
@@ -70,7 +70,7 @@ function calculatePayoutCommission(amount) {
             baseAmount: amount,
             note: 'Below minimum payout amount, using flat fee',
             flatFee: '₹30',
-            gst: '18%',
+            gst: '0%',
             totalCommission: commission.toFixed(2)
         };
     }

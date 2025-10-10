@@ -108,12 +108,12 @@ exports.getTransactions = async (req, res) => {
 
         // Filter by payment gateway
         if (payment_gateway) {
-            query.paymentGateway = payment_gateway; // 'razorpay' or 'cashfree'
+            query.paymentGateway = payment_gateway;
         }
 
         // Filter by payment method
         if (payment_method) {
-            query.paymentMethod = payment_method; // 'upi', 'card', etc.
+            query.paymentMethod = payment_method;
         }
 
         // Date range filter
@@ -123,14 +123,17 @@ exports.getTransactions = async (req, res) => {
             if (end_date) query.createdAt.$lte = new Date(end_date);
         }
 
-        // Search by customer name, email, phone, or transaction ID
+        // ✅ ENHANCED SEARCH - Description
         if (search) {
             query.$or = [
                 { customerName: { $regex: search, $options: 'i' } },
                 { customerEmail: { $regex: search, $options: 'i' } },
                 { customerPhone: { $regex: search, $options: 'i' } },
                 { transactionId: { $regex: search, $options: 'i' } },
-                { orderId: { $regex: search, $options: 'i' } }
+                { orderId: { $regex: search, $options: 'i' } },
+                { razorpayPaymentId: { $regex: search, $options: 'i' } },
+                { razorpayOrderId: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
             ];
         }
 
@@ -178,6 +181,11 @@ exports.getTransactions = async (req, res) => {
                 // Razorpay fields
                 razorpay_payment_link_id: t.razorpayPaymentLinkId,
                 razorpay_payment_id: t.razorpayPaymentId,
+                razorpay_order_id: t.razorpayOrderId,
+                
+                // ✅ UTR / Bank Reference
+                utr: t.acquirerData?.utr || t.acquirerData?.rrn || null,
+                bank_transaction_id: t.acquirerData?.bank_transaction_id || null,
                 
                 // Common fields
                 amount: t.amount,
@@ -196,7 +204,12 @@ exports.getTransactions = async (req, res) => {
                 
                 // Additional
                 description: t.description,
-                failure_reason: t.failureReason
+                failure_reason: t.failureReason,
+                
+                // Settlement info
+                settlement_status: t.settlementStatus,
+                expected_settlement_date: t.expectedSettlementDate,
+                settlement_date: t.settlementDate
             })),
             pagination: {
                 current_page: parseInt(page),
