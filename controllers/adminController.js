@@ -189,7 +189,35 @@ exports.getMyBalance = async (req, res) => {
         });
     }
 };
+exports.getTransactionById = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
 
+    // Fetch transaction (optionally add merchantId match for extra safety)
+    const txn = await Transaction.findOne({
+      transactionId: transactionId, // or _id: transactionId
+      // merchantId: req.merchantId,  // Optionally restrict to only merchant's txns
+    });
+
+    if (!txn) {
+      return res.status(404).json({
+        success: false,
+        error: 'Transaction not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      transaction: txn
+    });
+  } catch (error) {
+    console.error('Error fetching transaction by ID:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch transaction'
+    });
+  }
+};
 // ============ REQUEST PAYOUT (Updated - No Min/Max Limits) ============
 exports.requestPayout = async (req, res) => {
     try {

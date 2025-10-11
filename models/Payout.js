@@ -24,7 +24,7 @@ const PayoutSchema = new mongoose.Schema({
     
     status: {
         type: String,
-        enum: ['requested', 'pending', 'processing', 'completed', 'failed', 'cancelled'],
+       enum: ['requested','rejected', 'pending', 'processing', 'completed', 'failed', 'cancelled'],
         default: 'requested'
     },
     
