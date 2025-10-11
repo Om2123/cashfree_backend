@@ -28,7 +28,8 @@ const {
     getMyPayouts,
     requestPayout,
     getMyBalance,
-    cancelPayoutRequest
+    cancelPayoutRequest,
+    getPayoutStatusById
 } = require('../controllers/adminController.js');
 
 // ============ MERCHANT APIs (API Key Auth) ============
@@ -57,5 +58,6 @@ router.post('/merchant/payout/request', auth, requestPayout);
 router.get('/merchant/balance', auth, getMyBalance);
 router.post('/merchant/payout/:payoutId/cancel', auth, cancelPayoutRequest);
 
+router.get('/merchant/payout/:payoutId/status', auth, getPayoutStatusById);
 
 module.exports = router;
