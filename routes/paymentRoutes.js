@@ -29,6 +29,7 @@ const {
     requestPayout,
     getMyBalance,
     cancelPayoutRequest,
+    getTransactionById ,
     getPayoutStatusById
 } = require('../controllers/adminController.js');
 
@@ -57,6 +58,7 @@ router.get('/merchant/payouts', auth, getMyPayouts);
 router.post('/merchant/payout/request', auth, requestPayout);
 router.get('/merchant/balance', auth, getMyBalance);
 router.post('/merchant/payout/:payoutId/cancel', auth, cancelPayoutRequest);
+router.get('/merchant/transactions/:transactionId', auth, getTransactionById);
 
 router.get('/merchant/payout/:payoutId/status', auth, getPayoutStatusById);
 
