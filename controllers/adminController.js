@@ -593,3 +593,38 @@ exports.cancelPayoutRequest = async (req, res) => {
         });
     }
 };
+// Get payout status by payoutId
+exports.getPayoutStatusById = async (req, res) => {
+    try {
+        const payoutId = req.params.payoutId;
+
+        const payout = await Payout.findOne({ payoutId }).lean();
+
+        if (!payout) {
+            return res.status(404).json({
+                success: false,
+                error: 'Payout not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            payoutId: payout.payoutId,
+            status: payout.status,
+            amount: payout.amount,
+            netAmount: payout.netAmount,
+            requestedAt: payout.requestedAt,
+            approvedAt: payout.approvedAt,
+            completedAt: payout.completedAt,
+            rejectionReason: payout.rejectionReason,
+            utr: payout.utr,
+            adminNotes: payout.adminNotes
+        });
+    } catch (error) {
+        console.error('Get Payout Status Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch payout status'
+        });
+    }
+};
