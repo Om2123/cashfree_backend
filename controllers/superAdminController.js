@@ -1,6 +1,7 @@
 const Payout = require('../models/Payout');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
+const { calculatePayinCommission } = require('../utils/commissionCalculator');
 
 // ============ GET ALL PAYOUTS (SuperAdmin) ============
 exports.getAllPayouts = async (req, res) => {
@@ -443,4 +444,152 @@ exports.getAllTransactions = async (req, res) => {
 };
 
 
- 
+ // controllers/superadminController.js
+
+// ============ GET DASHBOARD STATISTICS ============
+exports.getDashboardStats = async (req, res) => {
+    try {
+        console.log(`📊 SuperAdmin ${req.user.name} fetching dashboard statistics`);
+
+        // Get all merchants
+        const merchants = await User.find({ role: 'admin' });
+        const activeMerchants = merchants.filter(m => m.status === 'active');
+        const inactiveMerchants = merchants.filter(m => m.status === 'inactive');
+
+        // Get all transactions
+        const allTransactions = await Transaction.find({});
+        const paidTransactions = allTransactions.filter(t => t.status === 'paid');
+        const settledTransactions = allTransactions.filter(t => t.settlementStatus === 'settled');
+        const unsettledTransactions = allTransactions.filter(t => t.settlementStatus === 'unsettled');
+        const failedTransactions = allTransactions.filter(t => t.status === 'failed');
+        const pendingTransactions = allTransactions.filter(t => t.status === 'pending' || t.status === 'created');
+
+        // Calculate revenue
+        const totalRevenue = paidTransactions.reduce((sum, t) => sum + t.amount, 0);
+        const totalRefunded = allTransactions.reduce((sum, t) => sum + (t.refundAmount || 0), 0);
+        
+        // Calculate commission
+        let totalPayinCommission = 0;
+        paidTransactions.forEach(t => {
+            const commissionInfo = calculatePayinCommission(t.amount);
+            totalPayinCommission += commissionInfo.commission;
+        });
+
+        // Get all payouts
+        const allPayouts = await Payout.find({});
+        const requestedPayouts = allPayouts.filter(p => p.status === 'requested');
+        const pendingPayouts = allPayouts.filter(p => p.status === 'pending' || p.status === 'processing');
+        const completedPayouts = allPayouts.filter(p => p.status === 'completed');
+        const rejectedPayouts = allPayouts.filter(p => p.status === 'rejected');
+        const failedPayouts = allPayouts.filter(p => p.status === 'failed');
+
+        // Calculate payout amounts
+        const totalPayoutRequested = allPayouts.reduce((sum, p) => sum + p.amount, 0);
+        const totalPayoutCompleted = completedPayouts.reduce((sum, p) => sum + p.netAmount, 0);
+        const totalPayoutPending = pendingPayouts.reduce((sum, p) => sum + p.netAmount, 0);
+        const totalPayoutCommission = allPayouts.reduce((sum, p) => sum + p.commission, 0);
+
+        // Settlement info
+        const availableForPayout = settledTransactions.filter(t => t.availableForPayout && !t.settledInPayout);
+        const inPayouts = settledTransactions.filter(t => t.settledInPayout);
+
+        let totalAvailableBalance = 0;
+        availableForPayout.forEach(t => {
+            const commissionInfo = calculatePayinCommission(t.amount);
+            totalAvailableBalance += (t.amount - commissionInfo.commission);
+        });
+
+        // Today's stats
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const todayTransactions = allTransactions.filter(t => new Date(t.createdAt) >= today);
+        const todayRevenue = todayTransactions.filter(t => t.status === 'paid').reduce((sum, t) => sum + t.amount, 0);
+        const todayPayouts = allPayouts.filter(p => new Date(p.createdAt) >= today);
+
+        // This week stats
+        const oneWeekAgo = new Date();
+        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        
+        const weekTransactions = allTransactions.filter(t => new Date(t.createdAt) >= oneWeekAgo);
+        const weekRevenue = weekTransactions.filter(t => t.status === 'paid').reduce((sum, t) => sum + t.amount, 0);
+
+        // Response
+        res.json({
+            success: true,
+            stats: {
+                merchants: {
+                    total: merchants.length,
+                    active: activeMerchants.length,
+                    inactive: inactiveMerchants.length,
+                    new_this_week: merchants.filter(m => new Date(m.createdAt) >= oneWeekAgo).length
+                },
+                
+                transactions: {
+                    total: allTransactions.length,
+                    paid: paidTransactions.length,
+                    pending: pendingTransactions.length,
+                    failed: failedTransactions.length,
+                    settled: settledTransactions.length,
+                    unsettled: unsettledTransactions.length,
+                    today: todayTransactions.length,
+                    this_week: weekTransactions.length,
+                    success_rate: allTransactions.length > 0 
+                        ? ((paidTransactions.length / allTransactions.length) * 100).toFixed(2) 
+                        : 0
+                },
+                
+                revenue: {
+                    total: totalRevenue.toFixed(2),
+                    commission_earned: totalPayinCommission.toFixed(2),
+                    net_revenue: (totalRevenue - totalPayinCommission).toFixed(2),
+                    refunded: totalRefunded.toFixed(2),
+                    today: todayRevenue.toFixed(2),
+                    this_week: weekRevenue.toFixed(2),
+                    average_transaction: paidTransactions.length > 0 
+                        ? (totalRevenue / paidTransactions.length).toFixed(2) 
+                        : 0
+                },
+                
+                payouts: {
+                    total_requests: allPayouts.length,
+                    requested: requestedPayouts.length,
+                    pending: pendingPayouts.length,
+                    completed: completedPayouts.length,
+                    rejected: rejectedPayouts.length,
+                    failed: failedPayouts.length,
+                    total_amount_requested: totalPayoutRequested.toFixed(2),
+                    total_completed: totalPayoutCompleted.toFixed(2),
+                    total_pending: totalPayoutPending.toFixed(2),
+                    commission_earned: totalPayoutCommission.toFixed(2),
+                    today: todayPayouts.length
+                },
+                
+                settlement: {
+                    settled_transactions: settledTransactions.length,
+                    unsettled_transactions: unsettledTransactions.length,
+                    available_for_payout: availableForPayout.length,
+                    in_payouts: inPayouts.length,
+                    available_balance: totalAvailableBalance.toFixed(2)
+                },
+                
+                platform: {
+                    total_commission_earned: (totalPayinCommission + totalPayoutCommission).toFixed(2),
+                    payin_commission: totalPayinCommission.toFixed(2),
+                    payout_commission: totalPayoutCommission.toFixed(2),
+                    net_platform_revenue: (totalPayinCommission + totalPayoutCommission - totalPayoutCompleted).toFixed(2)
+                }
+            },
+            timestamp: new Date()
+        });
+
+        console.log(`✅ Dashboard stats sent to SuperAdmin`);
+
+    } catch (error) {
+        console.error('❌ Get Dashboard Stats Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch dashboard statistics'
+        });
+    }
+};
