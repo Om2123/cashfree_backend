@@ -1,122 +1,80 @@
+// utils/settlementCalculator.js
+
 /**
- * Calculate settlement date for a transaction (T+1 with weekend skip)
- * 
- * Rules:
- * - T+1: 24 hours minimum after payment
- * - Saturday & Sunday are off (no settlement)
- * - If T+1 falls on weekend, move to Monday
- * 
- * Examples:
- * - Monday payment → Tuesday (24 hours later)
- * - Tuesday payment → Wednesday (24 hours later)
- * - Wednesday payment → Thursday (24 hours later)
- * - Thursday payment → Friday (24 hours later)
- * - Friday payment → Monday (skip weekend, 72+ hours)
- * - Saturday payment → Monday (skip Sunday, 48+ hours)
- * - Sunday payment → Monday (24+ hours)
+ * Calculate expected settlement date with 4 PM cutoff rule
+ * - Payment before 4 PM: T+1 settlement
+ * - Payment after 4 PM: T+2 settlement (considered next day)
+ * - Weekends: Settle on Monday
  */
-function calculateSettlementDate(paidAt) {
-    const paid = new Date(paidAt);
-    const settlement = new Date(paid);
+function calculateExpectedSettlementDate(paidAt) {
+    const paymentDate = new Date(paidAt);
+    const paymentHour = paymentDate.getHours();
     
-    // Add 24 hours (T+1)
-    settlement.setTime(settlement.getTime() + (24 * 60 * 60 * 1000));
+    // If payment is after 4 PM (16:00), consider it as next day
+    const effectivePaymentDate = paymentHour >= 16 
+        ? new Date(paymentDate.getTime() + 24 * 60 * 60 * 1000) // Add 1 day
+        : paymentDate;
     
-    // Check what day T+1 falls on
-    const dayOfWeek = settlement.getDay();
+    // Calculate T+1 from effective payment date
+    let settlementDate = new Date(effectivePaymentDate);
+    settlementDate.setDate(settlementDate.getDate() + 1); // T+1
     
-    // If T+1 is Saturday (6), move to Monday
-    if (dayOfWeek === 6) {
-        settlement.setDate(settlement.getDate() + 2); // Saturday -> Monday
+    // Handle weekends
+    const dayOfWeek = settlementDate.getDay();
+    
+    if (dayOfWeek === 0) { // Sunday -> Monday
+        settlementDate.setDate(settlementDate.getDate() + 1);
+    } else if (dayOfWeek === 6) { // Saturday -> Monday
+        settlementDate.setDate(settlementDate.getDate() + 2);
     }
-    // If T+1 is Sunday (0), move to Monday
-    else if (dayOfWeek === 0) {
-        settlement.setDate(settlement.getDate() + 1); // Sunday -> Monday
-    }
     
-    return settlement;
+    return settlementDate;
 }
 
 /**
- * Check if a transaction is ready for settlement
- * - Must be at least 24 hours old
- * - Current time must be past the expected settlement date
- * - Not on weekend
+ * Check if transaction is ready for settlement
  */
 function isReadyForSettlement(paidAt, expectedSettlementDate) {
     const now = new Date();
-    const paid = new Date(paidAt);
-    const expected = new Date(expectedSettlementDate);
+    const currentDay = now.getDay();
     
     // Don't settle on weekends
-    const currentDay = now.getDay();
     if (currentDay === 0 || currentDay === 6) {
-        return false; // Saturday or Sunday - no settlement
-    }
-    
-    // Check if 24 hours have passed since payment
-    const hoursSincePayment = (now - paid) / (1000 * 60 * 60);
-    if (hoursSincePayment < 24) {
         return false;
     }
     
-    // Check if expected settlement time has passed
-    return now >= expected;
+    const settlementTime = new Date(expectedSettlementDate);
+    
+    // Ready if current time >= expected settlement time
+    return now >= settlementTime;
 }
 
 /**
- * Get settlement status text for display
+ * Get settlement status message for display
  */
-function getSettlementStatusText(paidAt, expectedSettlementDate, settlementStatus) {
-    if (settlementStatus === 'settled') {
-        return 'Settled';
-    }
-    
+function getSettlementStatusMessage(paidAt, expectedSettlementDate) {
     const now = new Date();
-    const expected = new Date(expectedSettlementDate);
+    const paymentDate = new Date(paidAt);
+    const paymentHour = paymentDate.getHours();
+    const settlementDate = new Date(expectedSettlementDate);
     
-    const diffMs = expected - now;
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffHours / 24);
+    const isAfter4PM = paymentHour >= 16;
     
-    if (diffMs <= 0) {
-        return 'Settling soon';
-    } else if (diffDays > 0) {
-        return `Settles in ${diffDays} day${diffDays > 1 ? 's' : ''}`;
-    } else if (diffHours > 0) {
-        return `Settles in ${diffHours} hour${diffHours > 1 ? 's' : ''}`;
-    } else {
-        return 'Settling soon';
-    }
-}
-
-/**
- * Get human-readable settlement date text
- */
-function getSettlementDateText(expectedSettlementDate) {
-    const settlement = new Date(expectedSettlementDate);
-    const now = new Date();
-    
-    // Check if today
-    if (settlement.toDateString() === now.toDateString()) {
-        return 'Today';
+    if (now >= settlementDate) {
+        return 'Ready for settlement';
     }
     
-    // Check if tomorrow
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    if (settlement.toDateString() === tomorrow.toDateString()) {
-        return 'Tomorrow';
+    const daysUntil = Math.ceil((settlementDate - now) / (1000 * 60 * 60 * 24));
+    
+    if (isAfter4PM) {
+        return `Settles in ${daysUntil} day(s) (paid after 4 PM - T+2)`;
     }
     
-    // Otherwise return day name
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return days[settlement.getDay()];
+    return `Settles in ${daysUntil} day(s) (T+1)`;
 }
 
 module.exports = {
-    calculateSettlementDate,
+    calculateExpectedSettlementDate,
     isReadyForSettlement,
-    getSettlementStatusText,
-    getSettlementDateText
+    getSettlementStatusMessage
 };
