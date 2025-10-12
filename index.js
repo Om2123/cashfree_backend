@@ -23,6 +23,7 @@ settlementJob.start();
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', require('./routes/apiRoutes'));
+app.use('/api/superadmin', require('./routes/superAdminRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/razorpay', require('./routes/razorpayRoutes')); // ✅ NEW
 
