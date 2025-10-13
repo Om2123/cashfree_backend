@@ -89,6 +89,10 @@ const UserSchema = new mongoose.Schema({
         type: Number,
         default: 100 // Minimum ₹100
     },
+    freePayoutsUnder500: {
+        type: Number,
+        default: 5
+    },
     
     // ✅ STATUS & TIMESTAMPS
     status: {

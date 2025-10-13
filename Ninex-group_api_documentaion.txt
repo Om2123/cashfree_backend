@@ -1,0 +1,290 @@
+Ninex Group API Documentation
+=============================
+
+This document provides an overview of the Ninex Group API, including authentication, available endpoints, and example requests.
+
+---
+
+## 1. Authentication
+
+The API uses two methods of authentication:
+
+*   **API Key Authentication:** For machine-to-machine communication (e.g., creating payment links). The API key should be sent in the `x-api-key` header.
+*   **JWT (Bearer Token) Authentication:** For user-facing actions (e.g., managing profile, requesting payouts). The JWT should be sent in the `Authorization` header as a Bearer token.
+
+---
+
+## 2. User Flow
+
+### 2.1. User Signup
+
+*   **Endpoint:** `POST /api/auth/signup`
+*   **Description:** Creates a new user account.
+*   **Authentication:** None
+*   **Request Body:**
+    ```json
+    {
+        "name": "John Doe",
+        "email": "john.doe@example.com",
+        "password": "your_password"
+    }
+    ```
+
+### 2.2. User Login
+
+*   **Endpoint:** `POST /api/auth/login`
+*   **Description:** Authenticates a user and returns a JWT.
+*   **Authentication:** None
+*   **Request Body:**
+    ```json
+    {
+        "email": "john.doe@example.com",
+        "password": "your_password"
+    }
+    ```
+
+### 2.3. Get User Profile
+
+*   **Endpoint:** `GET /api/auth/profile`
+*   **Description:** Retrieves the profile of the authenticated user.
+*   **Authentication:** JWT
+
+### 2.4. Update User Profile
+
+*   **Endpoint:** `PUT /api/auth/profile`
+*   **Description:** Updates the profile of the authenticated user.
+*   **Authentication:** JWT
+*   **Request Body:**
+    ```json
+    {
+        "name": "Johnathan Doe"
+    }
+    ```
+
+---
+
+## 3. API Key Management
+
+### 3.1. Create API Key
+
+*   **Endpoint:** `POST /api/create`
+*   **Description:** Creates a new API key for the authenticated user.
+*   **Authentication:** JWT
+
+### 3.2. Get API Key
+
+*   **Endpoint:** `GET /api/get`
+*   **Description:** Retrieves the API key of the authenticated user.
+*   **Authentication:** JWT
+
+### 3.3. Delete API Key
+
+*   **Endpoint:** `DELETE /api/delete`
+*   **Description:** Deletes the API key of the authenticated user.
+*   **Authentication:** JWT
+
+### 3.4. Regenerate API Key
+
+*   **Endpoint:** `POST /api/regenerate`
+*   **Description:** Generates a new API key, invalidating the old one.
+*   **Authentication:** JWT
+
+---
+
+## 4. Payment Flow
+
+### 4.1. Create Razorpay Payment Link
+
+*   **Endpoint:** `POST /api/razorpay/create-payment-link`
+*   **Description:** Creates a new Razorpay payment link.
+*   **Authentication:** API Key
+*   **Request Body:**
+    ```json
+    {
+        "amount": 100,
+        "customer_name": "Test Customer",
+        "customer_email": "test@example.com",
+        "customer_phone": "9999988888",
+        "description": "Payment for order #123"
+    }
+    ```
+
+### 4.2. Verify Razorpay Payment
+
+*   **Endpoint:** `POST /api/razorpay/verify-payment`
+*   **Description:** Verifies the status of a Razorpay payment.
+*   **Authentication:** API Key
+*   **Request Body:**
+    ```json
+    {
+        "payment_link_id": "plink_xxxxxxxxxxxxxx"
+    }
+    ```
+
+### 4.3. Handle Razorpay Webhook
+
+*   **Endpoint:** `POST /api/razorpay/webhook`
+*   **Description:** Handles incoming webhooks from Razorpay. The signature is verified.
+*   **Authentication:** None
+
+### 4.4. Get Payment Status
+
+*   **Endpoint:** `GET /api/payments/status/:orderId`
+*   **Description:** Retrieves the status of a payment.
+*   **Authentication:** API Key
+
+### 4.5. Get Transactions
+
+*   **Endpoint:** `GET /api/payments/transactions`
+*   **Description:** Retrieves a list of transactions for the authenticated merchant.
+*   **Authentication:** API Key
+
+---
+
+## 5. Payout Flow
+
+### Payout Commission
+
+*   **Free Payouts:** Each merchant receives 5 free payouts for amounts under 500rs.
+*   **Under 500rs:** After the free payouts are used, a flat fee of 10rs is charged for payouts under 500rs.
+*   **500rs - 1000rs:** A flat fee of 30rs + 18% GST is charged.
+*   **Above 1000rs:** A commission of 1.50% + 18% GST is charged.
+
+If a payout that used a free credit is rejected or cancelled, the free credit is returned to the merchant.
+
+
+### 5.1. Request Payout
+
+*   **Endpoint:** `POST /api/payments/merchant/payout/request`
+*   **Description:** Requests a new payout for a specific date.
+*   **Authentication:** JWT
+*   **Request Body:**
+    ```json
+    {
+        "payoutDate": "2025-10-12",
+        "transferMode": "bank_transfer",
+        "beneficiaryDetails": {
+            "accountNumber": "1234567890",
+            "ifscCode": "ABCD0123456",
+            "accountHolderName": "John Doe"
+        },
+        "notes": "Weekly payout"
+    }
+    ```
+
+### 5.2. Get My Payouts
+
+*   **Endpoint:** `GET /api/payments/merchant/payouts`
+*   **Description:** Retrieves a list of payouts for the authenticated merchant.
+*   **Authentication:** JWT
+
+### 5.3. Cancel Payout Request
+
+*   **Endpoint:** `POST /api/payments/merchant/payout/:payoutId/cancel`
+*   **Description:** Cancels a pending payout request.
+*   **Authentication:** JWT
+*   **Request Body:**
+    ```json
+    {
+        "reason": "Cancelled by merchant"
+    }
+    ```
+
+### 5.4. Get Payout Status
+
+*   **Endpoint:** `GET /api/payments/merchant/payout/:payoutId/status`
+*   **Description:** Retrieves the status of a specific payout.
+*   **Authentication:** JWT
+
+---
+
+## 6. Superadmin Flow
+
+### 6.1. Get All Payouts
+
+*   **Endpoint:** `GET /api/superadmin/payouts/all`
+*   **Description:** Retrieves all payouts for all merchants.
+*   **Authentication:** Superadmin JWT
+
+### 6.2. Approve Payout
+
+*   **Endpoint:** `POST /api/superadmin/payout/:payoutId/approve`
+*   **Description:** Approves a payout request.
+*   **Authentication:** Superadmin JWT
+*   **Request Body:**
+    ```json
+    {
+        "notes": "Approved for processing"
+    }
+    ```
+
+### 6.3. Reject Payout
+
+*   **Endpoint:** `POST /api/superadmin/payout/:payoutId/reject`
+*   **Description:** Rejects a payout request.
+*   **Authentication:** Superadmin JWT
+*   **Request Body:**
+    ```json
+    {
+        "reason": "Insufficient documentation"
+    }
+    ```
+
+### 6.4. Process Payout
+
+*   **Endpoint:** `POST /api/superadmin/payout/:payoutId/process`
+*   **Description:** Marks a payout as completed and provides a UTR.
+*   **Authentication:** Superadmin JWT
+*   **Request Body:**
+    ```json
+    {
+        "utr": "UTR123456789",
+        "notes": "Processed via NEFT"
+    }
+    ```
+
+### 6.5. Get All Transactions
+
+*   **Endpoint:** `GET /api/superadmin/transactions`
+*   **Description:** Retrieves all transactions for all merchants.
+*   **Authentication:** Superadmin JWT
+
+### 6.6. Get Dashboard Stats
+
+*   **Endpoint:** `GET /api/superadmin/dashboard/stats`
+*   **Description:** Retrieves dashboard statistics for the superadmin.
+*   **Authentication:** Superadmin JWT
+
+---
+
+## 7. Webhook Configuration
+
+### 7.1. Configure Merchant Webhook
+
+*   **Endpoint:** `POST /api/payments/merchant/webhook/configure`
+*   **Description:** Configures a webhook endpoint for the merchant.
+*   **Authentication:** JWT
+*   **Request Body:**
+    ```json
+    {
+        "webhook_url": "https://your-domain.com/webhook-handler"
+    }
+    ```
+
+### 7.2. Get Merchant Webhook Configuration
+
+*   **Endpoint:** `GET /api/payments/merchant/webhook/config`
+*   **Description:** Retrieves the webhook configuration for the merchant.
+*   **Authentication:** JWT
+
+### 7.3. Test Merchant Webhook
+
+*   **Endpoint:** `POST /api/payments/merchant/webhook/test`
+*   **Description:** Sends a test webhook to the configured endpoint.
+*   **Authentication:** JWT
+
+### 7.4. Delete Merchant Webhook
+
+*   **Endpoint:** `DELETE /api/payments/merchant/webhook`
+*   **Description:** Deletes the webhook configuration for the merchant.
+*   **Authentication:** JWT

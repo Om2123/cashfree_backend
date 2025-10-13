@@ -128,13 +128,22 @@ exports.approvePayout = async (req, res) => {
         }
 
         // Update payout
-        payout.status = 'pending';
+        payout.status = 'pending'; // Or 'approved'
         payout.approvedBy = req.user._id;
         payout.approvedByName = req.user.name;
         payout.approvedAt = new Date();
         payout.superAdminNotes = notes || '';
 
         await payout.save();
+
+        // Update associated transactions
+        await Transaction.updateMany({
+            payoutId: payout._id
+        }, {
+            $set: {
+                payoutStatus: 'paid'
+            }
+        });
 
         res.json({
             success: true,
@@ -187,6 +196,15 @@ exports.rejectPayout = async (req, res) => {
             });
         }
 
+        // --- Rollback Free Payout --- 
+        if (payout.commissionType === 'free') {
+            const merchant = await User.findById(payout.merchantId);
+            if (merchant) {
+                merchant.freePayoutsUnder500 += 1;
+                await merchant.save();
+            }
+        }
+
         // Update payout
         payout.status = 'rejected';
         payout.rejectedBy = req.user._id;
@@ -195,6 +213,16 @@ exports.rejectPayout = async (req, res) => {
         payout.rejectionReason = reason;
 
         await payout.save();
+
+        // Rollback associated transactions
+        await Transaction.updateMany({
+            payoutId: payout._id
+        }, {
+            $set: {
+                payoutStatus: 'unpaid',
+                payoutId: null
+            }
+        });
 
         res.json({
             success: true,

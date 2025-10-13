@@ -20,6 +20,12 @@ const settlementJob = cron.schedule('0 * * * *', async () => {
             return;
         }
 
+        // ✅ NEW: Only settle after 4 PM
+        if (currentHour < 16) {
+            console.log(`⏰ Current time is ${currentHour}:00 - Settlement only runs after 4 PM (16:00)`);
+            return;
+        }
+
         // Find all unsettled transactions
         const unsettledTransactions = await Transaction.find({
             status: 'paid',
@@ -45,7 +51,7 @@ const settlementJob = cron.schedule('0 * * * *', async () => {
             if (isReadyForSettlement(transaction.paidAt, transaction.expectedSettlementDate)) {
                 transaction.settlementStatus = 'settled';
                 transaction.settlementDate = now;
-                transaction.availableForPayout = true; // ✅ Make available for payout
+                transaction.availableForPayout = true;
                 transaction.updatedAt = now;
                 await transaction.save();
                 
@@ -55,10 +61,16 @@ const settlementJob = cron.schedule('0 * * * *', async () => {
                 console.log(`✅ Settled: ${transaction.transactionId}`);
                 console.log(`   - Paid: ${paymentDate.toISOString()} (${paymentDate.getHours()}:00)`);
                 console.log(`   - After 4 PM: ${isAfter4PM ? 'Yes (T+2)' : 'No (T+1)'}`);
+                console.log(`   - Expected Settlement: ${transaction.expectedSettlementDate}`);
                 console.log(`   - Settled: ${now.toISOString()}`);
                 console.log(`   - Hours since payment: ${hoursSincePayment.toFixed(1)}`);
             } else {
                 notReadyCount++;
+                // Log why not ready
+                const expectedDate = new Date(transaction.expectedSettlementDate);
+                console.log(`⏳ Not ready: ${transaction.transactionId}`);
+                console.log(`   - Expected: ${expectedDate.toISOString()}`);
+                console.log(`   - Current: ${now.toISOString()}`);
             }
         }
 

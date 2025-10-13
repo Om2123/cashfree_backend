@@ -1,8 +1,8 @@
 {
-  "name": "cashkavach",
+  "name": "ninexgroup",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": {
+  "scripts": {   "docs:pdf": "md-to-pdf docs/Backend-API.md",
     "start": "node index.js",
     "dev": "nodemon index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -28,3 +28,5 @@
     "nodemon": "^3.1.10"
   }
 }
+
+

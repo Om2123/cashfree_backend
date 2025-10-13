@@ -2,9 +2,7 @@
 
 /**
  * Calculate expected settlement date with 4 PM cutoff rule
- * - Payment before 4 PM: T+1 settlement
- * - Payment after 4 PM: T+2 settlement (considered next day)
- * - Weekends: Settle on Monday
+ * Settlement happens AFTER 4 PM on the settlement date
  */
 function calculateExpectedSettlementDate(paidAt) {
     const paymentDate = new Date(paidAt);
@@ -28,15 +26,20 @@ function calculateExpectedSettlementDate(paidAt) {
         settlementDate.setDate(settlementDate.getDate() + 2);
     }
     
+    // ✅ NEW: Set settlement time to 4 PM (16:00) of the settlement date
+    settlementDate.setHours(16, 0, 0, 0);
+    
     return settlementDate;
 }
 
 /**
  * Check if transaction is ready for settlement
+ * Now checks if current time >= settlement date at 4 PM
  */
 function isReadyForSettlement(paidAt, expectedSettlementDate) {
     const now = new Date();
     const currentDay = now.getDay();
+    const currentHour = now.getHours();
     
     // Don't settle on weekends
     if (currentDay === 0 || currentDay === 6) {
@@ -45,7 +48,8 @@ function isReadyForSettlement(paidAt, expectedSettlementDate) {
     
     const settlementTime = new Date(expectedSettlementDate);
     
-    // Ready if current time >= expected settlement time
+    // ✅ NEW: Must be after 4 PM on the settlement date
+    // Ready if current time >= expected settlement time (which is 4 PM on settlement date)
     return now >= settlementTime;
 }
 
@@ -64,13 +68,27 @@ function getSettlementStatusMessage(paidAt, expectedSettlementDate) {
         return 'Ready for settlement';
     }
     
-    const daysUntil = Math.ceil((settlementDate - now) / (1000 * 60 * 60 * 24));
+    // Calculate days and hours until settlement
+    const msUntilSettlement = settlementDate - now;
+    const hoursUntil = Math.ceil(msUntilSettlement / (1000 * 60 * 60));
+    const daysUntil = Math.ceil(msUntilSettlement / (1000 * 60 * 60 * 24));
     
-    if (isAfter4PM) {
-        return `Settles in ${daysUntil} day(s) (paid after 4 PM - T+2)`;
+    // Format settlement date nicely
+    const settlementDateStr = settlementDate.toLocaleDateString('en-IN', { 
+        weekday: 'short', 
+        month: 'short', 
+        day: 'numeric' 
+    });
+    
+    if (hoursUntil < 24) {
+        return `Settles today at 4 PM`;
     }
     
-    return `Settles in ${daysUntil} day(s) (T+1)`;
+    if (isAfter4PM) {
+        return `Settles on ${settlementDateStr} at 4 PM (paid after 4 PM - T+2)`;
+    }
+    
+    return `Settles on ${settlementDateStr} at 4 PM (T+1)`;
 }
 
 module.exports = {
