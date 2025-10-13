@@ -96,10 +96,12 @@ exports.getMyBalance = async (req, res) => {
         res.json({
             success: true,
             merchant: {
-                merchantId: req.merchantId,
-                merchantName: req.merchantName,
-                merchantEmail: req.user.email
-            },
+    merchantId: req.merchantId,
+    merchantName: req.merchantName,
+    merchantEmail: req.user.email,
+    freePayoutsRemaining: req.user.freePayoutsUnder500 || 0  // ✅ ADD THIS
+},
+
             balance: {
                 // ✅ SETTLED BALANCE (can withdraw)
                 settled_revenue: settledRevenue.toFixed(2),
@@ -122,9 +124,9 @@ exports.getMyBalance = async (req, res) => {
                 pending_payouts: totalPending.toFixed(2),
                 
                 commission_structure: {
-                    payin: '3.8% + 18% GST (Effective: 4.484%)',
-                    payout_500_to_1000: '₹30 + 18% GST (₹35.40)',
-                    payout_above_1000: '1.50% + 18% GST (1.77%)'
+                    payin: '3.8% ',
+                    payout_500_to_1000: '₹30 ',
+                    payout_above_1000: '(1.77%)'
                 }
             },
             settlement_info: {
@@ -222,179 +224,61 @@ exports.getTransactionById = async (req, res) => {
 exports.requestPayout = async (req, res) => {
     try {
         const {
-            amount,
+            payoutDate, // Expecting a date string like 'YYYY-MM-DD'
             transferMode,
             beneficiaryDetails,
             notes
         } = req.body;
 
-        console.log(`💰 Admin ${req.user.name} requesting payout of ₹${amount}`);
+        console.log(`💰 Admin ${req.user.name} requesting payout for date: ${payoutDate}`);
 
         // Validation
-        if (!amount || !transferMode || !beneficiaryDetails) {
+        if (!payoutDate || !transferMode || !beneficiaryDetails) {
             return res.status(400).json({
                 success: false,
-                error: 'amount, transferMode, and beneficiaryDetails are required'
+                error: 'payoutDate, transferMode, and beneficiaryDetails are required'
             });
         }
 
-        // Validate amount
-        const payoutAmount = parseFloat(amount);
+        // --- Date-based Transaction Fetching ---
+        const startDate = new Date(payoutDate);
+        startDate.setHours(0, 0, 0, 0);
+        const endDate = new Date(payoutDate);
+        endDate.setHours(23, 59, 59, 999);
+
+        const transactionsForPayout = await Transaction.find({
+            merchantId: req.merchantId,
+            settlementStatus: 'settled',
+            settlementDate: {
+                $gte: startDate,
+                $lte: endDate
+            },
+            payoutStatus: 'unpaid'
+        });
+
+        if (transactionsForPayout.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: `No unsettled transactions found for ${payoutDate}`
+            });
+        }
+
+        const totalAmount = transactionsForPayout.reduce((sum, t) => sum + t.amount, 0);
         
-        // ✅ NO MINIMUM/MAXIMUM LIMITS - Only positive amount check
-        if (payoutAmount <= 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Payout amount must be greater than 0'
-            });
-        }
-
-        // Validate beneficiary details
-        if (transferMode === 'bank_transfer') {
-            if (!beneficiaryDetails.accountNumber || !beneficiaryDetails.ifscCode || 
-                !beneficiaryDetails.accountHolderName) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Bank transfer requires accountNumber, ifscCode, and accountHolderName'
-                });
-            }
-
-            const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
-            if (!ifscRegex.test(beneficiaryDetails.ifscCode)) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid IFSC code format'
-                });
-            }
-
-            if (beneficiaryDetails.accountNumber.length < 9 || beneficiaryDetails.accountNumber.length > 18) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid account number length'
-                });
-            }
-        } else if (transferMode === 'upi') {
-            if (!beneficiaryDetails.upiId) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'UPI transfer requires upiId'
-                });
-            }
-
-            const upiRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z]+$/;
-            if (!upiRegex.test(beneficiaryDetails.upiId)) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid UPI ID format'
-                });
-            }
-        } else {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid transfer mode. Use bank_transfer or upi'
-            });
-        }
-
-        // ✅ CALCULATE AVAILABLE BALANCE (ONLY SETTLED TRANSACTIONS)
-        const successfulTransactions = await Transaction.find({
-            merchantId: req.merchantId,
-            status: 'paid'
-        });
-
-        // Separate settled and unsettled
-        const settledTransactions = successfulTransactions.filter(t => t.settlementStatus === 'settled');
-        const unsettledTransactions = successfulTransactions.filter(t => t.settlementStatus === 'unsettled');
-
-        let settledRevenue = 0;
-        let settledCommission = 0;
-
-        settledTransactions.forEach(transaction => {
-            settledRevenue += transaction.amount;
-            const commissionInfo = calculatePayinCommission(transaction.amount);
-            settledCommission += commissionInfo.commission;
-        });
-
-        let unsettledRevenue = 0;
-        unsettledTransactions.forEach(transaction => {
-            unsettledRevenue += transaction.amount;
-        });
-
-        const totalRefunded = successfulTransactions.reduce((sum, t) => sum + (t.refundAmount || 0), 0);
-
-        const completedPayouts = await Payout.find({
-            merchantId: req.merchantId,
-            status: 'completed'
-        });
-        const pendingPayouts = await Payout.find({
-            merchantId: req.merchantId,
-            status: { $in: ['requested', 'pending', 'processing'] }
-        });
-
-        const totalPaidOut = completedPayouts.reduce((sum, p) => sum + p.netAmount, 0);
-        const totalPending = pendingPayouts.reduce((sum, p) => sum + p.netAmount, 0);
-
-        // ✅ ONLY SETTLED BALANCE AVAILABLE FOR PAYOUT
-        const settledNetRevenue = settledRevenue - totalRefunded - settledCommission;
-        const availableBalance = settledNetRevenue - totalPaidOut - totalPending;
-
-        // Check if sufficient settled balance
-        if (availableBalance <= 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'No settled balance available for payout',
-                balance_info: {
-                    settled_balance: settledNetRevenue.toFixed(2),
-                    available_balance: availableBalance.toFixed(2),
-                    total_paid_out: totalPaidOut.toFixed(2),
-                    pending_payouts: totalPending.toFixed(2),
-                    unsettled_revenue: unsettledRevenue.toFixed(2)
-                },
-                message: 'Wait for settlement to complete before requesting payout. Settlement happens daily at 3 PM (T+1).'
-            });
-        }
-
-        // ✅ CALCULATE PAYOUT COMMISSION
-        const payoutCommissionInfo = calculatePayoutCommission(payoutAmount);
+        // --- Balance and Commission Calculation ---
+        const merchant = await User.findById(req.merchantId);
+        const payoutCommissionInfo = calculatePayoutCommission(totalAmount, merchant);
         const payoutCommission = payoutCommissionInfo.commission;
         const netAmount = payoutCommissionInfo.netAmount;
 
-        // ✅ Check if net amount can be paid from available balance
-        if (netAmount > availableBalance) {
-            return res.status(400).json({
-                success: false,
-                error: 'Insufficient settled balance for this payout request',
-                balance_info: {
-                    available_balance: availableBalance.toFixed(2),
-                    requested_gross_amount: payoutAmount.toFixed(2),
-                    payout_commission: payoutCommission.toFixed(2),
-                    requested_net_amount: netAmount.toFixed(2),
-                    shortfall: (netAmount - availableBalance).toFixed(2),
-                    
-                    // ✅ Additional breakdown
-                    settled_revenue: settledRevenue.toFixed(2),
-                    settled_commission: settledCommission.toFixed(2),
-                    settled_net_revenue: settledNetRevenue.toFixed(2),
-                    total_paid_out: totalPaidOut.toFixed(2),
-                    pending_payouts: totalPending.toFixed(2),
-                    
-                    // Unsettled funds info
-                    unsettled_revenue: unsettledRevenue.toFixed(2),
-                    unsettled_transactions_count: unsettledTransactions.length
-                },
-                commission_breakdown: payoutCommissionInfo.breakdown,
-                suggestion: `You can request up to ₹${(availableBalance / (1 - (payoutAmount > 1000 ? 0.0177 : 35.40/payoutAmount))).toFixed(2)} (gross amount)`
-            });
-        }
-
-        // Generate payout ID
+        // --- Create Payout Request ---
         const payoutId = `PAYOUT_REQ_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
-        // Create payout request
         const payout = new Payout({
             payoutId,
             merchantId: req.merchantId,
             merchantName: req.merchantName,
-            amount: payoutAmount,
+            amount: totalAmount,
             commission: payoutCommission,
             commissionType: payoutCommissionInfo.commissionType,
             commissionBreakdown: payoutCommissionInfo.breakdown,
@@ -411,50 +295,38 @@ exports.requestPayout = async (req, res) => {
 
         await payout.save();
 
-        console.log(`✅ Payout request created: ${payoutId} by ${req.user.name}`);
-        console.log(`   - Gross Amount: ₹${payoutAmount}`);
-        console.log(`   - Commission: ₹${payoutCommission} (${payoutCommissionInfo.commissionType})`);
-        console.log(`   - Net Amount: ₹${netAmount}`);
-        console.log(`   - Available Balance: ₹${availableBalance.toFixed(2)}`);
-
-        // Mask sensitive info in response
-        const maskedBeneficiary = { ...beneficiaryDetails };
-        if (maskedBeneficiary.accountNumber) {
-            const accNum = maskedBeneficiary.accountNumber;
-            maskedBeneficiary.accountNumber = 'XXXX' + accNum.slice(-4);
+        // --- Update Transactions and Decrement Free Payouts ---
+        if (payoutCommissionInfo.commissionType === 'free') {
+            merchant.freePayoutsUnder500 -= 1;
+            await merchant.save();
         }
+
+        const transactionIds = transactionsForPayout.map(t => t._id);
+        await Transaction.updateMany({
+            _id: {
+                $in: transactionIds
+            }
+        }, {
+            $set: {
+                payoutStatus: 'requested',
+                payoutId: payout._id
+            }
+        });
+
+        console.log(`✅ Payout request created: ${payoutId} for ${transactionsForPayout.length} transactions.`);
 
         res.json({
             success: true,
             payout: {
                 payoutId,
-                amount: payoutAmount,
+                amount: totalAmount,
                 commission: payoutCommission,
-                commissionType: payoutCommissionInfo.commissionType,
-                commissionBreakdown: payoutCommissionInfo.breakdown,
                 netAmount,
-                transferMode,
-                beneficiaryDetails: maskedBeneficiary,
                 status: 'requested',
                 requestedAt: payout.requestedAt,
-                notes: notes || ''
+                transaction_count: transactionsForPayout.length
             },
-            balance_info: {
-                // Before payout
-                previous_available_balance: availableBalance.toFixed(2),
-                previous_settled_balance: settledNetRevenue.toFixed(2),
-                
-                // After payout
-                new_available_balance: (availableBalance - netAmount).toFixed(2),
-                total_pending_payouts: (totalPending + netAmount).toFixed(2),
-                
-                // Settlement info
-                settled_transactions_count: settledTransactions.length,
-                unsettled_transactions_count: unsettledTransactions.length,
-                unsettled_revenue: unsettledRevenue.toFixed(2)
-            },
-            message: 'Payout request submitted successfully. Awaiting SuperAdmin approval.',
-            note: 'Only settled balance is available for payout. Unsettled funds will be available after tomorrow 3 PM settlement.'
+            message: 'Payout request submitted successfully.'
         });
 
     } catch (error) {
@@ -594,6 +466,15 @@ exports.cancelPayoutRequest = async (req, res) => {
             });
         }
 
+        // --- Rollback Free Payout --- 
+        if (payout.commissionType === 'free') {
+            const merchant = await User.findById(payout.merchantId);
+            if (merchant) {
+                merchant.freePayoutsUnder500 += 1;
+                await merchant.save();
+            }
+        }
+
         payout.status = 'cancelled';
         payout.rejectedBy = req.user._id;
         payout.rejectedByName = req.user.name;
@@ -601,6 +482,16 @@ exports.cancelPayoutRequest = async (req, res) => {
         payout.rejectionReason = reason || 'Cancelled by merchant';
 
         await payout.save();
+
+        // Rollback associated transactions
+        await Transaction.updateMany({
+            payoutId: payout._id
+        }, {
+            $set: {
+                payoutStatus: 'unpaid',
+                payoutId: null
+            }
+        });
 
         res.json({
             success: true,

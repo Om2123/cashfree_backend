@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const Transaction = require('../models/Transaction');
 const { sendMerchantWebhook } = require('./merchantWebhookController');
 const User = require('../models/User');
-const { calculateSettlementDate } = require('../utils/settlementCalculator');
+const { calculateExpectedSettlementDate } = require('../utils/settlementCalculator');
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -247,7 +247,7 @@ async function handlePaymentLinkPaid(payload) {
             const paidAt = new Date(payment.created_at * 1000);
             
             // ✅ CALCULATE SETTLEMENT DATE (T+1, Skip Weekends)
-            const expectedSettlement = calculateSettlementDate(paidAt);
+const expectedSettlement = calculateExpectedSettlementDate(paidAt);
 
             // Update transaction
             transaction.status = 'paid';

@@ -44,7 +44,17 @@ const PayoutSchema = new mongoose.Schema({
     rejectedByName: String,
     rejectedAt: Date,
     rejectionReason: String,
-    
+    // Payout.js
+commissionType: {
+    type: String,
+    enum: ['free', 'tier1', 'tier2', 'percentage'],
+    default: 'tier1'
+},
+commissionBreakdown: {
+    type: Object,
+    default: {}
+}
+,
     adminNotes: String,
     utr: String,
     

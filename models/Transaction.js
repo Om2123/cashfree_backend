@@ -107,15 +107,29 @@ const TransactionSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
-    expectedSettlementDate: {
-        type: Date,
-        default: function () {
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            tomorrow.setHours(15, 0, 0, 0); // 3 PM
-            return tomorrow;
-        }
+
+    // Payout Info
+    payoutId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Payout',
+        default: null
     },
+    payoutStatus: {
+        type: String,
+        enum: ['unpaid', 'requested', 'paid'],
+        default: 'unpaid'
+    },
+   expectedSettlementDate: {
+    type: Date,
+    default: null // ✅ Will be calculated properly when payment is marked as 'paid'
+}
+,// User.js (Admin schema)
+freePayoutsUnder500: {
+    type: Number,
+    default: 5, // 5 free payouts for amounts under ₹500
+    min: 0
+}
+,
     
     // Timestamps
     paidAt: Date,
