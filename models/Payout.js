@@ -47,9 +47,10 @@ const PayoutSchema = new mongoose.Schema({
     // Payout.js
 commissionType: {
     type: String,
-    enum: ['free', 'tier1', 'tier2', 'percentage'],
+    enum: ['free', 'tier1', 'tier2', 'percentage', 'flat'], // ✅ ADD 'flat'
     default: 'tier1'
 },
+
 commissionBreakdown: {
     type: Object,
     default: {}

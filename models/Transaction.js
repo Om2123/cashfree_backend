@@ -124,12 +124,8 @@ const TransactionSchema = new mongoose.Schema({
     default: null // ✅ Will be calculated properly when payment is marked as 'paid'
 }
 ,// User.js (Admin schema)
-freePayoutsUnder500: {
-    type: Number,
-    default: 5, // 5 free payouts for amounts under ₹500
-    min: 0
-}
-,
+
+
     
     // Timestamps
     paidAt: Date,

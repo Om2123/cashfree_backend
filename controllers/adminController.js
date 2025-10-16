@@ -3,7 +3,7 @@ const Payout = require('../models/Payout');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { calculatePayinCommission, calculatePayoutCommission } = require('../utils/commissionCalculator');
-const { getSettlementDateText, getSettlementStatusText } = require('../utils/settlementCalculator');
+const { getSettlementStatusMessage } = require('../utils/settlementCalculator');
 
 // ============ GET MY BALANCE (Updated with T+1 settlement tracking) ============
 
@@ -81,26 +81,26 @@ exports.getMyBalance = async (req, res) => {
         const nextUnsettledTransaction = unsettledTransactions
             .sort((a, b) => new Date(a.expectedSettlementDate) - new Date(b.expectedSettlementDate))[0];
 
-        const nextSettlementText = nextUnsettledTransaction 
-            ? getSettlementDateText(nextUnsettledTransaction.expectedSettlementDate)
+        const nextSettlementText = nextUnsettledTransaction
+            ? getSettlementStatusMessage(
+                nextUnsettledTransaction.paidAt,
+                nextUnsettledTransaction.expectedSettlementDate
+            )
             : 'No pending settlements';
 
         const nextSettlementStatus = nextUnsettledTransaction
-            ? getSettlementStatusText(
-                nextUnsettledTransaction.paidAt,
-                nextUnsettledTransaction.expectedSettlementDate,
-                nextUnsettledTransaction.settlementStatus
-              )
+            ? nextUnsettledTransaction.settlementStatus
             : null;
+
 
         res.json({
             success: true,
             merchant: {
-    merchantId: req.merchantId,
-    merchantName: req.merchantName,
-    merchantEmail: req.user.email,
-    freePayoutsRemaining: req.user.freePayoutsUnder500 || 0  // ✅ ADD THIS
-},
+                merchantId: req.merchantId,
+                merchantName: req.merchantName,
+                merchantEmail: req.user.email,
+                freePayoutsRemaining: req.user.freePayoutsUnder500 || 0  // ✅ ADD THIS
+            },
 
             balance: {
                 // ✅ SETTLED BALANCE (can withdraw)
@@ -108,12 +108,12 @@ exports.getMyBalance = async (req, res) => {
                 settled_commission: settledCommission.toFixed(2),
                 settled_net_revenue: settledNetRevenue.toFixed(2),
                 available_balance: availableBalance.toFixed(2),
-                
+
                 // ✅ UNSETTLED BALANCE (locked)
                 unsettled_revenue: unsettledRevenue.toFixed(2),
                 unsettled_commission: unsettledCommission.toFixed(2),
                 unsettled_net_revenue: unsettledNetRevenue.toFixed(2),
-                
+
                 // TOTALS
                 total_revenue: totalRevenue.toFixed(2),
                 total_refunded: totalRefunded.toFixed(2),
@@ -122,7 +122,7 @@ exports.getMyBalance = async (req, res) => {
                 net_revenue: (settledNetRevenue + unsettledNetRevenue).toFixed(2),
                 total_paid_out: totalPaidOut.toFixed(2),
                 pending_payouts: totalPending.toFixed(2),
-                
+
                 commission_structure: {
                     payin: '3.8% ',
                     payout_500_to_1000: '₹30 ',
@@ -133,16 +133,16 @@ exports.getMyBalance = async (req, res) => {
                 // Counts
                 settled_transactions: settledTransactions.length,
                 unsettled_transactions: unsettledTransactions.length,
-                
+
                 // Next settlement
                 next_settlement: nextSettlementText,
                 next_settlement_date: nextUnsettledTransaction?.expectedSettlementDate?.toISOString() || null,
                 next_settlement_status: nextSettlementStatus,
-                
+
                 // Settlement policy
                 settlement_policy: 'T+1 settlement (24 hours after payment)',
                 weekend_policy: 'Saturday and Sunday are off. Weekend payments settle on Monday.',
-                
+
                 // Examples for clarity
                 settlement_examples: {
                     'Monday payment': 'Settles Tuesday (24 hours)',
@@ -160,8 +160,8 @@ exports.getMyBalance = async (req, res) => {
                 unsettled_transactions: unsettledTransactions.length,
                 total_payouts_completed: completedPayouts.length,
                 pending_payout_requests: pendingPayouts.length,
-                avg_commission_per_transaction: successfulTransactions.length > 0 
-                    ? (totalCommission / successfulTransactions.length).toFixed(2) 
+                avg_commission_per_transaction: successfulTransactions.length > 0
+                    ? (totalCommission / successfulTransactions.length).toFixed(2)
                     : '0.00'
             },
             payout_eligibility: {
@@ -169,9 +169,9 @@ exports.getMyBalance = async (req, res) => {
                 minimum_payout_amount: 0,
                 maximum_payout_amount: maxPayoutGrossAmount.toFixed(2),
                 available_for_payout: availableBalance.toFixed(2),
-                reason: availableBalance <= 0 
-                    ? 'No settled balance available. Wait for T+1 settlement (24 hours after payment).' 
-                    : availableBalance < 500 
+                reason: availableBalance <= 0
+                    ? 'No settled balance available. Wait for T+1 settlement (24 hours after payment).'
+                    : availableBalance < 500
                         ? `Available balance is ₹${availableBalance.toFixed(2)} (after commission)`
                         : 'Eligible for payout'
             }
@@ -192,79 +192,72 @@ exports.getMyBalance = async (req, res) => {
     }
 };
 exports.getTransactionById = async (req, res) => {
-  try {
-    const { transactionId } = req.params;
+    try {
+        const { transactionId } = req.params;
 
-    // Fetch transaction (optionally add merchantId match for extra safety)
-    const txn = await Transaction.findOne({
-      transactionId: transactionId, // or _id: transactionId
-      // merchantId: req.merchantId,  // Optionally restrict to only merchant's txns
-    });
+        // Fetch transaction (optionally add merchantId match for extra safety)
+        const txn = await Transaction.findOne({
+            transactionId: transactionId, // or _id: transactionId
+            // merchantId: req.merchantId,  // Optionally restrict to only merchant's txns
+        });
 
-    if (!txn) {
-      return res.status(404).json({
-        success: false,
-        error: 'Transaction not found'
-      });
+        if (!txn) {
+            return res.status(404).json({
+                success: false,
+                error: 'Transaction not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            transaction: txn
+        });
+    } catch (error) {
+        console.error('Error fetching transaction by ID:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch transaction'
+        });
     }
-
-    res.json({
-      success: true,
-      transaction: txn
-    });
-  } catch (error) {
-    console.error('Error fetching transaction by ID:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch transaction'
-    });
-  }
 };
 // ============ REQUEST PAYOUT (Updated - No Min/Max Limits) ============
+// ============ REQUEST PAYOUT (All Settled Transactions) ============
 exports.requestPayout = async (req, res) => {
     try {
         const {
-            payoutDate, // Expecting a date string like 'YYYY-MM-DD'
             transferMode,
             beneficiaryDetails,
             notes
         } = req.body;
 
-        console.log(`💰 Admin ${req.user.name} requesting payout for date: ${payoutDate}`);
+        console.log(`💰 Admin ${req.user.name} requesting payout for all settled transactions`);
 
         // Validation
-        if (!payoutDate || !transferMode || !beneficiaryDetails) {
+        if (!transferMode || !beneficiaryDetails) {
             return res.status(400).json({
                 success: false,
-                error: 'payoutDate, transferMode, and beneficiaryDetails are required'
+                error: 'transferMode and beneficiaryDetails are required'
             });
         }
 
-        // --- Date-based Transaction Fetching ---
-        const startDate = new Date(payoutDate);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(payoutDate);
-        endDate.setHours(23, 59, 59, 999);
-
+        // ✅ Get ALL settled transactions that haven't been paid out yet
         const transactionsForPayout = await Transaction.find({
             merchantId: req.merchantId,
             settlementStatus: 'settled',
-            settlementDate: {
-                $gte: startDate,
-                $lte: endDate
-            },
             payoutStatus: 'unpaid'
-        });
+        }).sort({ settlementDate: 1 }); // Sort by oldest first
 
         if (transactionsForPayout.length === 0) {
             return res.status(400).json({
                 success: false,
-                error: `No unsettled transactions found for ${payoutDate}`
+                error: 'No settled transactions available for payout'
             });
         }
 
         const totalAmount = transactionsForPayout.reduce((sum, t) => sum + t.amount, 0);
-        
+
+        console.log(`📊 Found ${transactionsForPayout.length} settled transactions totaling ₹${totalAmount}`);
+
         // --- Balance and Commission Calculation ---
         const merchant = await User.findById(req.merchantId);
         const payoutCommissionInfo = calculatePayoutCommission(totalAmount, merchant);
@@ -302,16 +295,15 @@ exports.requestPayout = async (req, res) => {
         }
 
         const transactionIds = transactionsForPayout.map(t => t._id);
-        await Transaction.updateMany({
-            _id: {
-                $in: transactionIds
+        await Transaction.updateMany(
+            { _id: { $in: transactionIds } },
+            { 
+                $set: { 
+                    payoutStatus: 'requested',
+                    payoutId: payout._id
+                }
             }
-        }, {
-            $set: {
-                payoutStatus: 'requested',
-                payoutId: payout._id
-            }
-        });
+        );
 
         console.log(`✅ Payout request created: ${payoutId} for ${transactionsForPayout.length} transactions.`);
 
@@ -324,9 +316,15 @@ exports.requestPayout = async (req, res) => {
                 netAmount,
                 status: 'requested',
                 requestedAt: payout.requestedAt,
-                transaction_count: transactionsForPayout.length
+                transaction_count: transactionsForPayout.length,
+                transactions: transactionsForPayout.map(t => ({
+                    transactionId: t.transactionId,
+                    amount: t.amount,
+                    settlementDate: t.settlementDate,
+                    paidAt: t.paidAt
+                }))
             },
-            message: 'Payout request submitted successfully.'
+            message: 'Payout request submitted successfully for all settled transactions.'
         });
 
     } catch (error) {
@@ -345,8 +343,8 @@ exports.getMyPayouts = async (req, res) => {
             page = 1,
             limit = 20,
             status,
-            startDate,
-            endDate,
+            
+             
             sortBy = 'createdAt',
             sortOrder = 'desc'
         } = req.query;
@@ -363,11 +361,7 @@ exports.getMyPayouts = async (req, res) => {
             }
         }
 
-        if (startDate || endDate) {
-            query.createdAt = {};
-            if (startDate) query.createdAt.$gte = new Date(startDate);
-            if (endDate) query.createdAt.$lte = new Date(endDate);
-        }
+       
 
         const totalCount = await Payout.countDocuments(query);
 

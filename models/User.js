@@ -37,7 +37,11 @@ const UserSchema = new mongoose.Schema({
         address: String,
         gstin: String
     },
-    
+    freePayoutsUnder500: {
+    type: Number,
+    default: 5, // 5 free payouts for amounts under ₹500
+    min: 0
+},
     // API Key
     apiKey: {
         type: String,

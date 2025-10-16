@@ -2,17 +2,16 @@
 
 const cron = require('node-cron');
 const Transaction = require('../models/Transaction');
-const { isReadyForSettlement } = require('../utils/settlementCalculator');
+const { isReadyForSettlement, calculateExpectedSettlementDate } = require('../utils/settlementCalculator');
 
-// Run every hour
-const settlementJob = cron.schedule('0 * * * *', async () => {
+// ✅ Run every day at 4:00 PM (16:00)
+const settlementJob = cron.schedule('0 16 * * *', async () => {
     try {
         const now = new Date();
         const currentDay = now.getDay();
-        const currentHour = now.getHours();
         
-        console.log(`🔄 Running settlement job at ${now.toISOString()}`);
-        console.log(`   Current time: ${currentHour}:00 on ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][currentDay]}`);
+        console.log(`🔄 Running daily settlement job at ${now.toISOString()}`);
+        console.log(`   Current day: ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][currentDay]}`);
         
         // Don't run on weekends (Saturday=6, Sunday=0)
         if (currentDay === 0 || currentDay === 6) {
@@ -20,13 +19,7 @@ const settlementJob = cron.schedule('0 * * * *', async () => {
             return;
         }
 
-        // ✅ NEW: Only settle after 4 PM
-        if (currentHour < 16) {
-            console.log(`⏰ Current time is ${currentHour}:00 - Settlement only runs after 4 PM (16:00)`);
-            return;
-        }
-
-        // Find all unsettled transactions
+        // Find all unsettled paid transactions
         const unsettledTransactions = await Transaction.find({
             status: 'paid',
             settlementStatus: 'unsettled'
@@ -36,22 +29,31 @@ const settlementJob = cron.schedule('0 * * * *', async () => {
 
         let settledCount = 0;
         let notReadyCount = 0;
-        let after4PMCount = 0;
+        let backfilledCount = 0;
 
         for (const transaction of unsettledTransactions) {
+            // Backfill missing expectedSettlementDate if not present
+            if (!transaction.expectedSettlementDate && transaction.paidAt) {
+                transaction.expectedSettlementDate = calculateExpectedSettlementDate(transaction.paidAt);
+                await transaction.save();
+                backfilledCount++;
+                console.log(`🔧 Backfilled settlement date for: ${transaction.transactionId}`);
+            }
+
+            // Skip if still no expected settlement date
+            if (!transaction.expectedSettlementDate) {
+                console.log(`⚠️ Skipping ${transaction.transactionId} - No expected settlement date`);
+                continue;
+            }
+
             const paymentDate = new Date(transaction.paidAt);
             const paymentHour = paymentDate.getHours();
             const isAfter4PM = paymentHour >= 16;
-            
-            if (isAfter4PM) {
-                after4PMCount++;
-            }
             
             // Check if ready for settlement
             if (isReadyForSettlement(transaction.paidAt, transaction.expectedSettlementDate)) {
                 transaction.settlementStatus = 'settled';
                 transaction.settlementDate = now;
-                transaction.availableForPayout = true;
                 transaction.updatedAt = now;
                 await transaction.save();
                 
@@ -66,31 +68,72 @@ const settlementJob = cron.schedule('0 * * * *', async () => {
                 console.log(`   - Hours since payment: ${hoursSincePayment.toFixed(1)}`);
             } else {
                 notReadyCount++;
-                // Log why not ready
                 const expectedDate = new Date(transaction.expectedSettlementDate);
+                const hoursUntilReady = (expectedDate - now) / (1000 * 60 * 60);
                 console.log(`⏳ Not ready: ${transaction.transactionId}`);
                 console.log(`   - Expected: ${expectedDate.toISOString()}`);
                 console.log(`   - Current: ${now.toISOString()}`);
+                console.log(`   - Hours until ready: ${hoursUntilReady.toFixed(1)}`);
             }
         }
 
         console.log(`✅ Settlement job completed`);
         console.log(`   - Settled: ${settledCount} transactions`);
         console.log(`   - Not ready yet: ${notReadyCount} transactions`);
-        console.log(`   - After 4 PM payments (T+2): ${after4PMCount}`);
+        console.log(`   - Backfilled dates: ${backfilledCount} transactions`);
 
     } catch (error) {
         console.error('❌ Settlement job error:', error);
     }
+}, {
+    scheduled: true,
+    timezone: "Asia/Kolkata"
 });
+
+// Manual backfill function for existing data
+async function backfillSettlementDates() {
+    try {
+        console.log('🔧 Starting backfill for missing settlement dates...');
+        
+        const transactionsNeedingBackfill = await Transaction.find({
+            status: 'paid',
+            paidAt: { $exists: true },
+            $or: [
+                { expectedSettlementDate: { $exists: false } },
+                { expectedSettlementDate: null }
+            ]
+        });
+
+        console.log(`📦 Found ${transactionsNeedingBackfill.length} transactions needing backfill`);
+
+        let backfilledCount = 0;
+        for (const transaction of transactionsNeedingBackfill) {
+            transaction.expectedSettlementDate = calculateExpectedSettlementDate(transaction.paidAt);
+            await transaction.save();
+            backfilledCount++;
+            console.log(`✅ Backfilled: ${transaction.transactionId}`);
+        }
+
+        console.log(`✅ Backfill completed: ${backfilledCount} transactions updated`);
+        return { success: true, count: backfilledCount };
+    } catch (error) {
+        console.error('❌ Backfill error:', error);
+        return { success: false, error: error.message };
+    }
+}
 
 // For testing: Manual settlement trigger
 async function manualSettlement() {
     console.log('🔧 Manual settlement triggered');
-    await settlementJob._task();
+    const task = settlementJob;
+    if (task && typeof task._task === 'function') {
+        await task._task();
+    }
 }
 
+// ✅ IMPORTANT: Export all three functions
 module.exports = { 
     settlementJob,
-    manualSettlement 
+    manualSettlement,
+    backfillSettlementDates
 };

@@ -76,24 +76,27 @@ exports.createRazorpayPaymentLink = async (req, res) => {
             `${process.env.FRONTEND_URL}/razorpay-success.html`;
 
         // Create Payment Link options
-        const paymentLinkOptions = {
-            amount: parseFloat(amount) * 100,
-            currency: 'INR',
-            description: description || `Payment for ${merchantName}`,
-            customer: {
-                name: customer_name,
-                email: customer_email,
-                contact: `+91${customer_phone}`
-            },
-            notify: {
-                sms: true,
-                email: true
-            },
-            reminder_enable: true,
-            callback_url: `${finalCallbackUrl}?transaction_id=${transactionId}&status=success`, // ✅ Merchant's URL
-            callback_method: 'get',
-            reference_id: referenceId
-        };
+      const paymentLinkOptions = {
+  amount: parseFloat(amount) * 100,
+  currency: 'INR',
+  description: description || `Payment for ${merchantName}`,
+  customer: {
+    name: customer_name,
+    email: customer_email,
+    contact: `+91${customer_phone}`
+  },
+  notify: {
+    sms: true,
+    email: true
+  },
+  reminder_enable: true,
+  callback_url: `${finalCallbackUrl}?transaction_id=${transactionId}&status=success`,
+  callback_method: 'get',
+  reference_id: referenceId,
+  upi_link: true  // ✅ Creates a direct UPI payment link (skips Razorpay page entirely)
+};
+
+
 
         console.log('📤 Creating Razorpay Payment Link...');
         console.log('🔗 Callback URL:', finalCallbackUrl);
