@@ -102,7 +102,6 @@ exports.getAllPayouts = async (req, res) => {
         });
     }
 };
-
 // ============ APPROVE PAYOUT ============
 exports.approvePayout = async (req, res) => {
     try {
@@ -123,36 +122,45 @@ exports.approvePayout = async (req, res) => {
         if (payout.status !== 'requested') {
             return res.status(400).json({
                 success: false,
-                error: `Cannot approve payout with status: ${payout.status}`
+                error: `Cannot approve payout with status: ${payout.status}. Only 'requested' payouts can be approved.`,
+                currentStatus: payout.status
             });
         }
 
-        // Update payout
-        payout.status = 'pending'; // Or 'approved'
+        // ✅ Update payout to 'pending' status (approved, waiting for processing)
+        payout.status = 'pending';
         payout.approvedBy = req.user._id;
         payout.approvedByName = req.user.name;
         payout.approvedAt = new Date();
-        payout.superAdminNotes = notes || '';
+        payout.adminNotes = notes || '';
 
         await payout.save();
 
-        // Update associated transactions
-        await Transaction.updateMany({
-            payoutId: payout._id
-        }, {
-            $set: {
-                payoutStatus: 'paid'
+        // ✅ DO NOT update transaction status to 'paid' yet - only update to 'requested'
+        // Transactions should only be marked 'paid' after actual bank transfer is completed
+        await Transaction.updateMany(
+            { payoutId: payout._id },
+            { 
+                $set: { 
+                    payoutStatus: 'paid' // Keep as 'requested', not 'paid'
+                }
             }
-        });
+        );
+
+        console.log(`✅ Payout ${payoutId} approved and ready for processing`);
 
         res.json({
             success: true,
             message: 'Payout approved successfully. Ready for processing.',
             payout: {
                 payoutId: payout.payoutId,
+                amount: payout.amount,
+                netAmount: payout.netAmount,
                 status: payout.status,
                 approvedBy: payout.approvedByName,
-                approvedAt: payout.approvedAt
+                approvedAt: payout.approvedAt,
+                transferMode: payout.transferMode,
+                beneficiaryDetails: payout.beneficiaryDetails
             }
         });
 
@@ -189,10 +197,12 @@ exports.rejectPayout = async (req, res) => {
             });
         }
 
-        if (payout.status === 'completed') {
+        // ✅ Can reject 'requested' or 'pending' payouts, but not completed ones
+        if (!['requested', 'pending'].includes(payout.status)) {
             return res.status(400).json({
                 success: false,
-                error: 'Cannot reject a completed payout'
+                error: `Cannot reject payout with status: ${payout.status}. Can only reject 'requested' or 'pending' payouts.`,
+                currentStatus: payout.status
             });
         }
 
@@ -202,6 +212,7 @@ exports.rejectPayout = async (req, res) => {
             if (merchant) {
                 merchant.freePayoutsUnder500 += 1;
                 await merchant.save();
+                console.log(`✅ Restored 1 free payout to merchant ${merchant.name}`);
             }
         }
 
@@ -214,26 +225,31 @@ exports.rejectPayout = async (req, res) => {
 
         await payout.save();
 
-        // Rollback associated transactions
-        await Transaction.updateMany({
-            payoutId: payout._id
-        }, {
-            $set: {
-                payoutStatus: 'unpaid',
-                payoutId: null
+        // ✅ Rollback associated transactions
+        const updateResult = await Transaction.updateMany(
+            { payoutId: payout._id },
+            { 
+                $set: { 
+                    payoutStatus: 'unpaid',
+                    payoutId: null
+                }
             }
-        });
+        );
+
+        console.log(`✅ Payout ${payoutId} rejected. ${updateResult.modifiedCount} transactions rolled back.`);
 
         res.json({
             success: true,
-            message: 'Payout rejected successfully',
+            message: 'Payout rejected successfully. Transactions are now available for new payout requests.',
             payout: {
                 payoutId: payout.payoutId,
+                amount: payout.amount,
                 status: payout.status,
                 rejectedBy: payout.rejectedByName,
                 rejectedAt: payout.rejectedAt,
                 reason: payout.rejectionReason
-            }
+            },
+            transactions_rolled_back: updateResult.modifiedCount
         });
 
     } catch (error) {
@@ -251,7 +267,7 @@ exports.processPayout = async (req, res) => {
         const { payoutId } = req.params;
         const { utr, notes } = req.body;
 
-        if (!utr) {
+        if (!utr || utr.trim().length === 0) {
             return res.status(400).json({
                 success: false,
                 error: 'UTR/Transaction reference is required'
@@ -269,35 +285,70 @@ exports.processPayout = async (req, res) => {
             });
         }
 
-        if (payout.status !== 'pending' && payout.status !== 'processing') {
+        // ✅ Can only process 'pending' payouts (already approved)
+        if (payout.status !== 'pending') {
             return res.status(400).json({
                 success: false,
-                error: `Cannot process payout with status: ${payout.status}`
+                error: `Cannot process payout with status: ${payout.status}. Payout must be in 'pending' (approved) status first.`,
+                currentStatus: payout.status,
+                hint: payout.status === 'requested' ? 'Please approve the payout first' : null
             });
         }
 
-        // Update payout as completed
+        // ✅ Check for duplicate UTR
+        const existingPayout = await Payout.findOne({ 
+            utr: utr.trim(), 
+            _id: { $ne: payout._id },
+            status: 'completed'
+        });
+
+        if (existingPayout) {
+            return res.status(400).json({
+                success: false,
+                error: `UTR ${utr} is already used for another payout: ${existingPayout.payoutId}`,
+                duplicatePayoutId: existingPayout.payoutId
+            });
+        }
+
+        // ✅ Update payout as completed
         payout.status = 'completed';
         payout.processedBy = req.user._id;
         payout.processedByName = req.user.name;
         payout.processedAt = new Date();
         payout.completedAt = new Date();
-        payout.utr = utr;
-        payout.superAdminNotes = notes || payout.superAdminNotes;
+        payout.utr = utr.trim();
+        if (notes) {
+            payout.adminNotes = notes;
+        }
 
         await payout.save();
 
+        // ✅ NOW update transactions to 'paid' status (actual money transferred)
+        const updateResult = await Transaction.updateMany(
+            { payoutId: payout._id },
+            { 
+                $set: { 
+                    payoutStatus: 'paid' // Mark as paid only after UTR is confirmed
+                }
+            }
+        );
+
+        console.log(`✅ Payout ${payoutId} completed. ${updateResult.modifiedCount} transactions marked as paid.`);
+
         res.json({
             success: true,
-            message: 'Payout processed and completed successfully',
+            message: 'Payout processed and completed successfully. Funds transferred to merchant.',
             payout: {
                 payoutId: payout.payoutId,
                 status: payout.status,
+                amount: payout.amount,
                 netAmount: payout.netAmount,
                 utr: payout.utr,
                 processedBy: payout.processedByName,
-                completedAt: payout.completedAt
-            }
+                completedAt: payout.completedAt,
+                transferMode: payout.transferMode
+            },
+            transactions_updated: updateResult.modifiedCount
         });
 
     } catch (error) {

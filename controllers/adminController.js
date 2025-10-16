@@ -222,15 +222,17 @@ exports.getTransactionById = async (req, res) => {
 };
 // ============ REQUEST PAYOUT (Updated - No Min/Max Limits) ============
 // ============ REQUEST PAYOUT (All Settled Transactions) ============
+// ============ REQUEST PAYOUT (Custom Amount or All Settled) ============
 exports.requestPayout = async (req, res) => {
     try {
         const {
+            amount, // ✅ NEW: Optional custom amount
             transferMode,
             beneficiaryDetails,
             notes
         } = req.body;
 
-        console.log(`💰 Admin ${req.user.name} requesting payout for all settled transactions`);
+        console.log(`💰 Admin ${req.user.name} requesting payout`);
 
         // Validation
         if (!transferMode || !beneficiaryDetails) {
@@ -254,13 +256,59 @@ exports.requestPayout = async (req, res) => {
             });
         }
 
-        const totalAmount = transactionsForPayout.reduce((sum, t) => sum + t.amount, 0);
+        const totalAvailableAmount = transactionsForPayout.reduce((sum, t) => sum + t.amount, 0);
 
-        console.log(`📊 Found ${transactionsForPayout.length} settled transactions totaling ₹${totalAmount}`);
+        // ✅ Determine final payout amount
+        let finalAmount = amount || totalAvailableAmount;
+
+        // ✅ Validate requested amount
+        if (amount) {
+            if (amount <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Requested amount must be greater than 0'
+                });
+            }
+
+            if (amount > totalAvailableAmount) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Requested amount ₹${amount} exceeds available balance ₹${totalAvailableAmount}`,
+                    availableBalance: totalAvailableAmount
+                });
+            }
+
+            console.log(`📊 Partial payout requested: ₹${amount} out of ₹${totalAvailableAmount} available`);
+        } else {
+            console.log(`📊 Full payout requested: ₹${totalAvailableAmount} from ${transactionsForPayout.length} transactions`);
+        }
+
+        // ✅ Select transactions up to the requested amount
+        let selectedTransactions = [];
+        let runningTotal = 0;
+
+        for (const txn of transactionsForPayout) {
+            if (runningTotal + txn.amount <= finalAmount) {
+                selectedTransactions.push(txn);
+                runningTotal += txn.amount;
+            } else {
+                break; // Stop when we've collected enough
+            }
+        }
+
+        if (selectedTransactions.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'No transactions can fit within the requested amount',
+                minimumAmount: transactionsForPayout[0]?.amount
+            });
+        }
+
+        const actualPayoutAmount = selectedTransactions.reduce((sum, t) => sum + t.amount, 0);
 
         // --- Balance and Commission Calculation ---
         const merchant = await User.findById(req.merchantId);
-        const payoutCommissionInfo = calculatePayoutCommission(totalAmount, merchant);
+        const payoutCommissionInfo = calculatePayoutCommission(actualPayoutAmount, merchant);
         const payoutCommission = payoutCommissionInfo.commission;
         const netAmount = payoutCommissionInfo.netAmount;
 
@@ -271,7 +319,7 @@ exports.requestPayout = async (req, res) => {
             payoutId,
             merchantId: req.merchantId,
             merchantName: req.merchantName,
-            amount: totalAmount,
+            amount: actualPayoutAmount,
             commission: payoutCommission,
             commissionType: payoutCommissionInfo.commissionType,
             commissionBreakdown: payoutCommissionInfo.breakdown,
@@ -294,7 +342,7 @@ exports.requestPayout = async (req, res) => {
             await merchant.save();
         }
 
-        const transactionIds = transactionsForPayout.map(t => t._id);
+        const transactionIds = selectedTransactions.map(t => t._id);
         await Transaction.updateMany(
             { _id: { $in: transactionIds } },
             { 
@@ -305,26 +353,30 @@ exports.requestPayout = async (req, res) => {
             }
         );
 
-        console.log(`✅ Payout request created: ${payoutId} for ${transactionsForPayout.length} transactions.`);
+        console.log(`✅ Payout request created: ${payoutId} for ${selectedTransactions.length} transactions totaling ₹${actualPayoutAmount}`);
 
         res.json({
             success: true,
             payout: {
                 payoutId,
-                amount: totalAmount,
+                amount: amount || 'full',
+                actualAmount: actualPayoutAmount,
                 commission: payoutCommission,
                 netAmount,
                 status: 'requested',
                 requestedAt: payout.requestedAt,
-                transaction_count: transactionsForPayout.length,
-                transactions: transactionsForPayout.map(t => ({
+                transaction_count: selectedTransactions.length,
+                remaining_balance: totalAvailableAmount - actualPayoutAmount,
+                transactions: selectedTransactions.map(t => ({
                     transactionId: t.transactionId,
                     amount: t.amount,
                     settlementDate: t.settlementDate,
                     paidAt: t.paidAt
                 }))
             },
-            message: 'Payout request submitted successfully for all settled transactions.'
+            message: amount 
+                ? `Partial payout request of ₹${actualPayoutAmount} submitted successfully (${selectedTransactions.length} transactions)`
+                : `Payout request submitted successfully for all ${selectedTransactions.length} settled transactions`
         });
 
     } catch (error) {
@@ -335,6 +387,7 @@ exports.requestPayout = async (req, res) => {
         });
     }
 };
+
 
 // ============ GET MY PAYOUTS (Unchanged) ============
 exports.getMyPayouts = async (req, res) => {
